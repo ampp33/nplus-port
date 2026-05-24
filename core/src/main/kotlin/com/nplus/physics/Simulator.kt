@@ -198,6 +198,7 @@ open class Simulator(
     open fun spawnChainBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}
     open fun spawnLaserCharge(x: Float, y: Float) {}
     open fun playSoundGold() {}
+    open fun playSoundEntity(name: String) {}
 
     open fun spawnJumpDust(x: Float, y: Float, angle: Float) {}
     open fun spawnLandDust(x: Float, y: Float, angle: Float, speed: Float) {}

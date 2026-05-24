@@ -177,7 +177,9 @@ class FloorGuardEntity(private val objGrid: GridEntity, x: Float, y: Float) : En
             val rowThis   = eg.getGridCoordFromWorld1D(pos.y)
             val dir = if (pp.x >= pos.x) 1 else -1
             if (eg.scanHorizontal(rowThis, rowThis, colThis, colPlayer)) {
-                state = dir; break
+                state = dir
+                sim.playSoundEntity("guard_chase")
+                break
             }
         }
     }
@@ -241,7 +243,7 @@ class TurretEntity(x: Float, y: Float) : EntityBase() {
                     if (!isTargetVisible(sim)) { curState = 0; targetIndex = -1 }
                     else {
                         updateAim(target.getPos(), target.getVel())
-                        if (shotTimer > firetime) { shotTimer = 0f; curState = 2 }
+                        if (shotTimer > firetime) { shotTimer = 0f; curState = 2; sim.playSoundEntity("turret_prefire") }
                     }
                 }
                 2 -> { // prefire
@@ -351,6 +353,7 @@ class RocketEntity(private val objGrid: GridEntity, x: Float, y: Float) : Entity
                     val d = sqrt(dx*dx + dy*dy)
                     if (d != 0f) rocketDir.set(dx/d, dy/d) else rocketDir.set(1f, 0f)
                     objGrid.entityAdd(rocketPos, this); state = 2
+                    sim.playSoundEntity("rocket_fire")
                 }
             }
             2 -> {

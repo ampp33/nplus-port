@@ -36,11 +36,11 @@ class GameRenderer : Disposable {
         private val COL_NINJA_DEAD = Color(0.40f, 0.40f, 0.40f, 1f)
 
         // Sprite animation rates (fps)
-        private const val FPS_GOLD_COLLECT = 30f  // original Flash FPS; 14 frames ≈ 0.47 s
+        private const val FPS_GOLD_COLLECT = 60f  // original Flash FPS; 14 frames ≈ 0.47 s
         private const val FPS_LAUNCHPAD    = 8f
         private const val FPS_FLOORGUARD   = 8f
         private const val FPS_DRONE        = 8f
-        private const val FPS_ROCKET       = 10f
+        private const val FPS_ROCKET       = 30f
 
         // Turret: 17 frames cover 0..2π
         private const val TURRET_FRAMES = 17
@@ -56,11 +56,19 @@ class GameRenderer : Disposable {
     // Drives one-shot playback of frames 4–17 (the rising sparkle).
     private val goldCollectTimes = mutableMapOf<GoldEntity, Float>()
 
+    // Launchpad one-shot animations: entity → stateTime when last triggered.
+    // consumeTrigger() resets the entity flag; we store the moment here to time the one-shot.
+    private val launchpadTriggerTimes = mutableMapOf<LaunchpadEntity, Float>()
+
     // ---------------------------------------------------------------------------
-    // All sprites packed into one atlas. Region names: "<folder>/<1-based-frame>"
-    // e.g. "ninja/1", "tiles/3", "gold/5". See desktop:packAtlas Gradle task.
+    // sprites.atlas — all sprites except ninja (Nearest filtering, 1:1 scale).
+    //   Region names: "<folder>/<1-based-frame>" e.g. "tiles/3", "gold/5".
+    // ninja.atlas   — ninja frames only (Linear filtering, rendered at 0.2× scale).
+    //   Region names: "<1-based-frame>" e.g. "1", "13", "85".
+    // See desktop:packAtlas Gradle task.
     // ---------------------------------------------------------------------------
     private lateinit var atlas: TextureAtlas
+    private lateinit var ninjaAtlas: TextureAtlas
 
     // Tile sub-regions: each 72×72 atlas region has 24px transparent padding;
     // extract the centre 24×24 once at load time. Index = tile type (0 = EMPTY).
@@ -86,7 +94,8 @@ class GameRenderer : Disposable {
     // ---------------------------------------------------------------------------
 
     private fun loadSprites() {
-        atlas = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
+        atlas      = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
+        ninjaAtlas = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
         sprTileRegions = Array(42) { t ->
             val r = atlas.findRegion("tiles/${t + 1}")
                 ?: error("Atlas missing region: tiles/${t + 1}")
@@ -94,9 +103,12 @@ class GameRenderer : Disposable {
         }
     }
 
-    /** Look up a 1-based frame from the atlas (frame number matches the .png filename). */
+    /** Look up a 1-based frame. Ninja frames come from the Linear-filtered ninja atlas. */
     private fun fr(dir: String, frame: Int): TextureRegion =
-        atlas.findRegion("$dir/$frame") ?: error("Atlas missing region: $dir/$frame")
+        if (dir == "ninja")
+            ninjaAtlas.findRegion("$frame") ?: error("ninja atlas missing region: $frame")
+        else
+            atlas.findRegion("$dir/$frame") ?: error("Atlas missing region: $dir/$frame")
 
     /** Return a cycling frame for time-driven animations. */
     private fun cycled(dir: String, count: Int, fps: Float): TextureRegion {
@@ -129,33 +141,43 @@ class GameRenderer : Disposable {
 
         viewport.apply()
 
-        // Pre-pass: fill level interior, then paint FULL (type-1) solid tiles.
-        // TileTypes.FULL has a fully transparent sprite (Flash used a plain color fill, not
-        // a sprite for solid tiles), so we must draw them explicitly as solid rects.
+        val cs   = Simulator.GRID_CELL_SIZE.toFloat()
+        val cols = Simulator.GRID_NUM_COLS
+        val rows = Simulator.GRID_NUM_ROWS
+
+        // Pre-pass: fill level interior background only.
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = COL_LEVEL_BG
         shape.rect(0f, 0f, WORLD_W, WORLD_H)
-        shape.color = COL_BG   // tile color = #797988 = same as exterior
-        val cs   = Simulator.GRID_CELL_SIZE.toFloat()
-        val cols = Simulator.GRID_NUM_COLS
-        val rows = Simulator.GRID_NUM_ROWS
+        shape.end()
+
+        // Pass 1: entity sprites — rendered before solid walls so walls occlude them.
+        batch.projectionMatrix = camera.combined
+        batch.enableBlending()
+        batch.begin()
+        drawEntitySprites(sim.entityList())
+        batch.end()
+
+        // Pass 2: FULL (type-1) solid walls — drawn after entities so entity pixels
+        // that overlap into a solid tile are correctly hidden behind the wall.
+        // TileTypes.FULL has a transparent sprite; we paint it as a solid rect here.
+        shape.projectionMatrix = camera.combined
+        shape.begin(ShapeType.Filled)
+        shape.color = COL_BG
         for (row in 0 until rows) for (col in 0 until cols) {
             if (sim.tileGrid[col + row * cols] != TileTypes.FULL) continue
             shape.rect(col * cs, fy((row + 1) * cs), cs, cs)
         }
         shape.end()
 
-        // Pass 1: entities + tiles + living ninja via SpriteBatch
-        batch.projectionMatrix = camera.combined
-        batch.enableBlending()
+        // Pass 3: non-FULL tile sprites + living ninja — on top of everything.
         batch.begin()
-        drawEntitySprites(sim.entityList())  // entities behind tiles
-        drawTiles(sim.tileGrid)              // tiles on top of entities
-        drawNinjaSprites(sim.players)        // ninja always on top
+        drawTiles(sim.tileGrid)
+        drawNinjaSprites(sim.players)
         batch.end()
 
-        // Pass 2: dead ninja ragdoll via ShapeRenderer
+        // Pass 4: dead ninja ragdoll.
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja)
@@ -166,6 +188,7 @@ class GameRenderer : Disposable {
         shape.dispose()
         batch.dispose()
         atlas.dispose()
+        ninjaAtlas.dispose()
     }
 
     // ---------------------------------------------------------------------------
@@ -194,24 +217,25 @@ class GameRenderer : Disposable {
     }
 
     /**
-     * Draw a gold sprite frame with bottom-centre registration.
+     * Draw a gold sprite frame centred on the entity physics position.
      *
-     * The FFDec canvas is 6×54 but the idle shape occupies only the bottom 8 px
-     * (y=46–54). Anchoring the canvas bottom at entity position puts the coin
-     * visually just above the physics centre, which matches the original game.
+     * FFDec canvas is 6×54; registration = canvas centre (row 27). Idle coin
+     * content is at rows 46–53 (centre row ≈ 49.5 = 3.5 px from canvas bottom).
+     * Shifting 4 px below the entity screen-y centres the coin on the entity,
+     * giving equal visual distance from floor and ceiling surfaces.
      */
     private fun drawGoldTex(reg: TextureRegion, px: Float, py: Float) {
-        batch.draw(reg, px - reg.regionWidth / 2f, fy(py))
+        batch.draw(reg, px - reg.regionWidth / 2f, fy(py) - 4f)
     }
 
     /**
-     * Draw a rocket sprite frame with right-centre registration (rocket body/nose).
-     *
-     * The canvas is 61×11; the body is consistently at x≈55.5 while the smoke
-     * trail grows leftward across frames.
+     * Draw a rocket projectile frame with right-centre registration, rotated toward travel direction.
+     * Canvas is 61×11; body at x≈55.5, y-centre at 5.5. Rotation: negate atan2(dy,dx) for libGDX CCW.
      */
-    private fun drawRocketTex(reg: TextureRegion, px: Float, py: Float) {
-        batch.draw(reg, px - 55.5f, fy(py) - reg.regionHeight / 2f)
+    private fun drawRocketTex(reg: TextureRegion, px: Float, py: Float, ornDeg: Float) {
+        val w = reg.regionWidth.toFloat(); val h = reg.regionHeight.toFloat()
+        val ox = 55.5f; val oy = h / 2f
+        batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, 1f, 1f, ornDeg)
     }
 
     /**
@@ -268,8 +292,11 @@ class GameRenderer : Disposable {
                 drawCentered(reg, e.getPos().x, e.getPos().y)
             }
 
-            is ExitSwitch -> if (!e.isDoorOpen()) {
-                drawCentered(fr("exitswitch", 1), e.getPos().x, e.getPos().y)
+            is ExitSwitch -> {
+                if (!e.isDoorOpen())
+                    drawCentered(fr("exitswitch", 1), e.getPos().x, e.getPos().y)
+                else
+                    drawCentered(fr("exitswitch", 2), e.getPos().x, e.getPos().y)
             }
 
             is ThwompEntity -> {
@@ -295,9 +322,17 @@ class GameRenderer : Disposable {
                 drawCentered(fr("turret", idx + 1), pos.x, pos.y)
             }
 
-            is RocketEntity -> if (e.getState() == 2) {
-                val rp = e.getRocketPos()
-                drawRocketTex(cycled("rocket", 13, FPS_ROCKET), rp.x, rp.y)
+            is RocketEntity -> {
+                // Base/launcher: frame 1 = idle; frame 5 = launched pose (fire anim plays 2→5
+                // once on launch then stops at 5 per AS3 addFrameScript; we skip the one-shot).
+                drawCentered(fr("rocket_base", if (e.getState() == 2) 5 else 1), e.getPos().x, e.getPos().y)
+                // Flying projectile: only when state==2, rotated toward travel direction
+                if (e.getState() == 2) {
+                    val rp = e.getRocketPos()
+                    val rd = e.getRocketDir()
+                    val ornDeg = -Math.toDegrees(atan2(rd.y.toDouble(), rd.x.toDouble())).toFloat()
+                    drawRocketTex(cycled("rocket", 13, FPS_ROCKET), rp.x, rp.y, ornDeg)
+                }
             }
 
             is DroneChaser -> {
@@ -318,7 +353,13 @@ class GameRenderer : Disposable {
 
             is LaunchpadEntity -> {
                 val n = e.getNormal()
-                drawRotated(cycled("launchpad", 19, FPS_LAUNCHPAD), e.getPos().x, e.getPos().y, -normalAngleDeg(n.x, n.y))
+                if (e.consumeTrigger()) launchpadTriggerTimes[e] = stateTime
+                val t = launchpadTriggerTimes[e]
+                val frame = if (t != null && stateTime - t < 19f / FPS_LAUNCHPAD)
+                    ((stateTime - t) * FPS_LAUNCHPAD).toInt().coerceIn(0, 18) + 1
+                else
+                    1
+                drawRotated(fr("launchpad", frame), e.getPos().x, e.getPos().y, -normalAngleDeg(n.x, n.y))
             }
 
             is OnewayPlatformEntity -> {
@@ -331,19 +372,24 @@ class GameRenderer : Disposable {
                 drawRotated(fr("door_regular", 2), e.doorPos().x, e.doorPos().y, orn)
             }
 
-            is DoorLocked -> if (!e.isOpen()) {
+            is DoorLocked -> {
                 val orn = if (e.doorOrn() == 0f) 0f else -90f
-                drawRotated(fr("door_locked", 1), e.doorPos().x, e.doorPos().y, orn)
-                drawCentered(fr("door_locked_switch", 1), e.getSwitchPos().x, e.getSwitchPos().y)
+                if (!e.isOpen()) {
+                    drawRotated(fr("door_locked", 1), e.doorPos().x, e.doorPos().y, orn)
+                }
+                // Switch always visible: frame 1 = waiting, frame 2 = triggered (door opened)
+                drawCentered(fr("door_locked_switch", if (!e.isOpen()) 1 else 2),
+                    e.getSwitchPos().x, e.getSwitchPos().y)
             }
 
             is DoorTrap -> {
                 val orn = if (e.doorOrn() == 0f) 0f else -90f
                 if (!e.isOpen()) {
                     drawRotated(fr("door_trap", 11), e.doorPos().x, e.doorPos().y, orn)
-                } else {
-                    drawCentered(fr("door_trap_switch", 1), e.getSwitchPos().x, e.getSwitchPos().y)
                 }
+                // Switch always visible: frame 1 = armed (isOpen), frame 2 = triggered (!isOpen)
+                drawCentered(fr("door_trap_switch", if (e.isOpen()) 1 else 2),
+                    e.getSwitchPos().x, e.getSwitchPos().y)
             }
 
             else -> {}

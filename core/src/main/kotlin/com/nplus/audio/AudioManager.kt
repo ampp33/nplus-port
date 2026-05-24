@@ -25,6 +25,19 @@ interface AudioManager {
     fun playSound(name: String)
 
     /**
+     * Start a looping ambient sound.
+     * [name] is one of: "wallslide", "skid".
+     * Calling this while the loop is already playing is a no-op.
+     */
+    fun startLoopSound(name: String)
+
+    /**
+     * Stop a looping ambient sound started with [startLoopSound].
+     * No-op if the loop is not currently playing.
+     */
+    fun stopLoopSound(name: String)
+
+    /**
      * Play the gold-collection chime.
      * Debounced per frame — collecting multiple golds in one tick plays only once.
      */
@@ -58,6 +71,8 @@ interface AudioManager {
             override fun tick() {}
             override fun playSound(name: String) {}
             override fun playGold() {}
+            override fun startLoopSound(name: String) {}
+            override fun stopLoopSound(name: String) {}
             override fun playMusic(name: String) {}
             override fun stopMusic() {}
             override fun setVolume(volume: Float) {}

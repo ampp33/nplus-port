@@ -50,6 +50,12 @@ class AppStateManager(private val game: NPlusGame) {
 
     fun goToMenu() = transition(AppState.MainMenu)
 
+    /** Go straight to the episode grid with the cursor on [episode]. */
+    fun goToEpisodeGrid(episode: Int) {
+        state = AppState.MainMenu
+        game.setScreen(MenuScreen(this, startAtGrid = true, startEpisode = episode))
+    }
+
     fun playLevel(episode: Int, level: Int) {
         val ep = episode.coerceIn(0, maxEpisode)
         val lv = level.coerceIn(0, LEVELS_PER_EPISODE - 1)
@@ -93,7 +99,9 @@ class AppStateManager(private val game: NPlusGame) {
                 progress.setLastPlayed(nextEp, 0)
             }
             progress.save()
-            goToMenu()
+            // Land on the next episode so it's immediately selectable (clamped in case
+            // the player just beat the very last episode).
+            goToEpisodeGrid(nextEp.coerceAtMost(maxEpisode))
         }
     }
 

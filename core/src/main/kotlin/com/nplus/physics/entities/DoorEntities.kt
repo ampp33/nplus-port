@@ -90,7 +90,10 @@ class DoorRegular(
 
     override fun onCollision(sim: Simulator) {
         closeTimer = 0
-        if (!isDoorOpen()) changeDoorState(true)
+        if (!isDoorOpen()) {
+            changeDoorState(true)
+            sim.playSoundEntity("door_open")
+        }
     }
 
     override fun think(sim: Simulator) {

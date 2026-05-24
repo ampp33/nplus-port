@@ -24,7 +24,9 @@ class Ninja(
     startX: Float, startY: Float,
     val gfxColor: Int = 0,
     /** Callback for physics-timed sound cues (jump, land, death sounds). No-op by default. */
-    private val onSound: (name: String) -> Unit = {}
+    private val onSound: (name: String) -> Unit = {},
+    /** Callback to start/stop looping ambient sounds ("wallslide", "skid"). No-op by default. */
+    private val onLoopSound: (name: String, active: Boolean) -> Unit = { _, _ -> }
 ) {
     // --- State enum ---
 
@@ -77,6 +79,9 @@ class Ninja(
     // Jump
     private var jumpTimer  = 0f
     private var wasJumpDown = false
+    // Pressing jump just before touching a wall is common; buffer the tap so it fires when nearWall
+    // becomes true within the window. 6 ticks ≈ 100 ms at 60 Hz — typical platformer feel margin.
+    private var jumpBuffer = 0
 
     // Contact state (updated each tick in postCollision)
     private var inAir    = true
@@ -295,6 +300,7 @@ class Ninja(
         val jumpHeld = inputSource.isJumpDown
         val jumpTap  = jumpHeld && !wasJumpDown
         wasJumpDown  = jumpHeld
+        if (jumpTap) jumpBuffer = 6 else if (jumpBuffer > 0) jumpBuffer--
 
         if (state == State.DISABLED || state == State.DEAD) return
 
@@ -341,7 +347,8 @@ class Ninja(
 
             // FALLING or WALL_SLIDING — check wall interactions
             if (nearWall) {
-                if (jumpTap) {
+                if (jumpBuffer > 0) {
+                    jumpBuffer = 0
                     val wallMult: Float; val wallBias: Float
                     if (state == State.WALL_SLIDING && dir * wallNormal.x < 0) {
                         wallMult = 1f; wallBias = 0.5f
@@ -504,8 +511,8 @@ class Ninja(
     }
 
     private fun actionFall()      { exitCurrentState(); state = State.FALLING }
-    private fun actionWallSlide() { exitCurrentState(); state = State.WALL_SLIDING }
-    private fun actionSkid()      { exitCurrentState(); state = State.SKIDDING }
+    private fun actionWallSlide() { exitCurrentState(); state = State.WALL_SLIDING; onLoopSound("wallslide", true) }
+    private fun actionSkid()      { exitCurrentState(); state = State.SKIDDING;    onLoopSound("skid",      true) }
     private fun actionRun(dir: Int) {
         facingDir = dir
         exitCurrentState(); state = State.RUNNING
@@ -515,7 +522,9 @@ class Ninja(
     private fun actionWin()       { exitCurrentState(); state = State.CELEBRATING }
 
     private fun exitCurrentState() {
-        if (state == State.JUMPING) g = normGrav
+        if (state == State.JUMPING)     g = normGrav
+        if (state == State.WALL_SLIDING) onLoopSound("wallslide", false)
+        if (state == State.SKIDDING)     onLoopSound("skid",      false)
     }
 
     // --- Collision response ---

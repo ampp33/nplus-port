@@ -187,6 +187,15 @@ class DroneChaser(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType: I
 
     fun isChasing() = chasing
 
+    private var prevChasing = false
+
+    override fun move(sim: Simulator) {
+        val wasChasing = prevChasing
+        super.move(sim)
+        prevChasing = chasing
+        if (!wasChasing && chasing) sim.playSoundEntity("drone_chase")
+    }
+
     companion object {
         private val MOVELIST_SURFACE_CW = intArrayOf(1, 0, 3, 2)
     }
@@ -266,6 +275,7 @@ class DroneLaser(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType: In
     override fun startPrefiring(sim: Simulator, target: Vec2) {
         laserDir.set(target.x - pos.x, target.y - pos.y); laserDir.normalize()
         sim.segGrid.getRaycastDistance(pos.x, pos.y, laserDir.x, laserDir.y, laserHitPos, laserHitN)
+        sim.playSoundEntity("laser_charge")
     }
 
     override fun updatePrefiring(sim: Simulator, target: Vec2) {

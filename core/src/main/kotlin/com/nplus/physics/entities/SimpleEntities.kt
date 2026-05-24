@@ -81,6 +81,7 @@ class MineEntity(private val objGrid: GridEntity, x: Float, y: Float) : EntityBa
         pos: Vec2, vel: Vec2, normal: Vec2, radius: Float, eps: Float): Boolean {
         if (!exploded && ColUtils.overlapCircleVsCircle(this.pos, r, pos, radius)) {
             sim.spawnExplosion(this.pos.x, this.pos.y)
+            sim.playSoundEntity("mine_explode")
             exploded = true
             objGrid.entityRemove(this)
             val dx = pos.x - this.pos.x; val dy = pos.y - this.pos.y
@@ -139,6 +140,7 @@ class ExitSwitch(private val objGrid: GridEntity, x: Float, y: Float,
     override fun collideVsCircleLogical(sim: Simulator, ninja: Ninja?, result: CollisionResultLogical,
         pos: Vec2, vel: Vec2, normal: Vec2, radius: Float, eps: Float): Boolean {
         if (ninja != null && !door.isOpen() && ColUtils.overlapCircleVsCircle(this.pos, r, pos, radius)) {
+            sim.playSoundEntity("exit_switch")
             door.openExit(objGrid)
             objGrid.entityRemove(this)
         }
@@ -174,12 +176,14 @@ class LaunchpadEntity(objGrid: GridEntity, x: Float, y: Float, nx: Float, ny: Fl
                     triggered = true; return true
                 }
                 sim.eventLaunchpadHitPlayer(ninja, this.normal.x * strength, this.normal.y * strength * upBias)
+                sim.playSoundEntity("launchpad")
                 triggered = true
             }
         }
         return false
     }
 
+    fun isTriggered(): Boolean { return triggered }
     fun getPos(): Vec2 = pos
     fun getNormal(): Vec2 = normal
     fun consumeTrigger(): Boolean { val t = triggered; triggered = false; return t }

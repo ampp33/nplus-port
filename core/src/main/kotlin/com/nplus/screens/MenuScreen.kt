@@ -40,7 +40,8 @@ import com.badlogic.gdx.utils.viewport.ExtendViewport
  * fontXl (32 px) — title "N+"
  */
 class MenuScreen(private val appState: AppStateManager,
-                 startAtGrid: Boolean = false) : Screen {
+                 startAtGrid: Boolean = false,
+                 startEpisode: Int = 0) : Screen {
 
     // --- Viewport ---
     private val camera   = OrthographicCamera()
@@ -102,7 +103,7 @@ class MenuScreen(private val appState: AppStateManager,
     private var menuState     = if (startAtGrid) MenuState.EPISODE_GRID else MenuState.MAIN_MENU
     private var mainCursor    = 0   // index within current main-menu item list
     private var confirmCursor = 0   // 0 = Yes, 1 = No
-    private var episodeCursor = 0
+    private var episodeCursor = startEpisode
 
     // Gamepad edge-detect
     private var prevGpUp      = false
