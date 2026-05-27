@@ -35,6 +35,10 @@ object SimGlobals {
         "rocket", "floorguard", "thwomp", "mine", "debug"
     )
 
+    // Timer constants (ported from App_MultiPurpose: _defaultStartingTicks = 90*sim_rate, _ticksPerGold = 2*sim_rate)
+    val DEFAULT_TIMER_TICKS: Int = (90 * SIM_RATE).toInt()   // 5400 ticks = 90 seconds
+    val TICKS_PER_GOLD: Int      = (2  * SIM_RATE).toInt()   // 120 ticks = 2 seconds per gold
+
     val ETYPE_TO_DTYPE: IntArray = intArrayOf(
         DEATHTYPE_EXPLOSIVE,  // SUICIDE
         DEATHTYPE_FALL,       // FALL

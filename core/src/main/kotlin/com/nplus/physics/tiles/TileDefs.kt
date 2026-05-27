@@ -19,15 +19,16 @@ private sealed class Archetype {
         override fun perp() = Lin(-p0y, p0x, -p1y, p1x)
     }
 
-    class Circ(val cx: Float, val cy: Float, val p0x: Float, val p0y: Float,
-               val p1x: Float, val p1y: Float) : Archetype() {
+    // Parameter order matches AS3 TileEdgeArchetype_Circular(p0x,p0y,p1x,p1y,centreX,centreY).
+    class Circ(val p0x: Float, val p0y: Float, val p1x: Float, val p1y: Float,
+               val cx: Float, val cy: Float) : Archetype() {
         override fun generate(tileX: Float, tileY: Float, hw: Float) =
             SegmentCircular(
                 tileX + cx*hw, tileY + cy*hw,
                 tileX + p0x*hw, tileY + p0y*hw,
                 tileX + p1x*hw, tileY + p1y*hw
             )
-        override fun perp() = Circ(-cy, cx, -p0y, p0x, -p1y, p1x)
+        override fun perp() = Circ(-p0y, p0x, -p1y, p1x, -cy, cx)
     }
 }
 

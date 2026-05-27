@@ -13,29 +13,39 @@ import com.nplus.physics.Simulator
  * Main gameplay screen.
  *
  * ## Physics loop
- * Fixed-step accumulator: physics ticks at [TICK_DT] = 1/SIM_RATE = 25 ms;
+ * Fixed-step accumulator: physics ticks at [TICK_DT] = 1/SIM_RATE;
  * rendering runs at the display refresh rate. [MAX_DELTA] caps the accumulator
  * to prevent the spiral-of-death on slow frames.
  *
- * ## Level flow
- * All level transitions go through [AppStateManager] — GameScreen never calls
- * `game.setScreen()` directly.
+ * ## Play states (see [PlayState])
+ * PRE_GAME  → level shown frozen, "press jump to begin" overlay; Jump starts game
+ * GAME      → simulation + timer running; ESC pauses, K suicides
+ * PAUSED    → simulation frozen, "paused" overlay; Jump/ESC resumes, Q quits
+ * POST_GAME → ninja dead, ragdoll running, "press jump to retry" overlay;
+ *             Jump retries (with same startingTicks), ESC quits to menu
  *
- * - Win       → [AppStateManager.levelComplete]
- * - All dead  → [AppStateManager.levelFailed]
- * - Pause (1st Escape) → toggle pause flag
- * - Pause (2nd Escape) → [AppStateManager.goToMenu]
- * - R key     → reload current level via [AppStateManager.levelFailed]
+ * ## Timer
+ * Counts down from [startingTicks] at 1 tick/physics-step.  Collecting gold
+ * adds [SimGlobals.TICKS_PER_GOLD] per coin.  When the timer hits 0 the ninja
+ * is killed via [Simulator.appTimeUp].  On retry [startingTicks] is the value
+ * that was in effect when this level began; on level advance the current value
+ * carries forward.
+ *
+ * ## Level flow
+ * All level transitions go through [AppStateManager].
  */
 class GameScreen(
-    private val appState:     AppStateManager,
-    private val episode:      Int = 0,
-    private val level:        Int = 0
+    private val appState:      AppStateManager,
+    private val episode:       Int = 0,
+    private val level:         Int = 0,
+    private val startingTicks: Int = SimGlobals.DEFAULT_TIMER_TICKS
 ) : Screen {
 
     companion object {
-        private const val TICK_DT   = 1f / SimGlobals.SIM_RATE   // 0.025 s
-        private const val MAX_DELTA = 0.1f                        // spiral-of-death guard
+        private const val TICK_DT             = 1f / SimGlobals.SIM_RATE
+        private const val MAX_DELTA           = 0.1f
+        // Frames before jump input is accepted in POST_GAME (prevents instant retry on death)
+        private const val POST_GAME_COOLDOWN  = (SimGlobals.SIM_RATE * 0.5f).toInt()  // 30
     }
 
     // --- Subsystems ---
@@ -43,15 +53,26 @@ class GameScreen(
     private val inputSrc = CombinedInputSource.keyboardAndGamepad()
     private lateinit var renderer: GameRenderer
 
-    // --- Runtime state ---
+    // --- Simulator ---
     private var sim: Simulator? = null
-    private var accumulator  = 0f
-    private var paused       = false
-    private var levelDone    = false   // one-frame debounce for level completion
 
-    // Key edge-detect
-    private var prevPause   = false
-    private var prevRestart = false
+    // --- Play state ---
+    private var playState          = PlayState.PRE_GAME
+    private var postGameCooldown   = 0
+
+    // --- Timer ---
+    private var currentTicks       = startingTicks
+    private var timerCalledTimeUp  = false   // guard: only call appTimeUp() once
+
+    // --- Fixed-step accumulator ---
+    private var accumulator        = 0f
+
+    // --- Edge-detect for all keys ---
+    private var prevJump   = false
+    private var prevPause  = false
+    private var prevK      = false
+    private var prevQ      = false
+    private var prevR      = false
 
     // -----------------------------------------------------------------------
     // Screen lifecycle
@@ -67,39 +88,121 @@ class GameScreen(
         val safeDelta  = delta.coerceAtMost(MAX_DELTA)
         val currentSim = sim ?: return
 
-        // --- Input (edge detect) ---
-        val nowPause   = inputSrc.isPauseDown || Gdx.input.isKeyPressed(Input.Keys.ESCAPE)
-        val nowRestart = Gdx.input.isKeyPressed(Input.Keys.R)
+        // Poll input once per frame (idempotent; sim also polls during tick)
+        val inp      = inputSrc.poll()
+        val nowJump  = inp.jump
+        val nowPause = inp.pause || Gdx.input.isKeyPressed(Input.Keys.ESCAPE)
+        val nowK     = Gdx.input.isKeyPressed(Input.Keys.K)
+        val nowQ     = Gdx.input.isKeyPressed(Input.Keys.Q)
+        val nowR     = Gdx.input.isKeyPressed(Input.Keys.R)
 
-        if (nowPause && !prevPause) {
-            if (paused) appState.goToMenu()   // second Escape → back to menu
-            else        paused = true          // first Escape → pause
-        }
-        if (nowRestart && !prevRestart) { appState.levelFailed(episode, level); return }
-        prevPause   = nowPause
-        prevRestart = nowRestart
+        when (playState) {
 
-        // --- Physics tick (fixed timestep accumulator) ---
-        audio.tick()
-        if (!paused) {
-            accumulator += safeDelta
-            while (accumulator >= TICK_DT) {
-                currentSim.tick()
-                accumulator -= TICK_DT
+            PlayState.PRE_GAME -> {
+                audio.tick()
+                if (nowJump && !prevJump) {
+                    playState = PlayState.GAME
+                }
+                if (nowPause && !prevPause) {
+                    // ESC before starting → back to menu immediately
+                    appState.goToMenu(); return
+                }
+                // R in pre-game: restart (resets to same startingTicks)
+                if (nowR && !prevR) {
+                    appState.levelFailed(episode, level, startingTicks); return
+                }
+            }
+
+            PlayState.GAME -> {
+                audio.tick()
+
+                // ESC → pause
+                if (nowPause && !prevPause) {
+                    playState = PlayState.PAUSED
+                    audio.pause()
+                }
+
+                // K → suicide (kills ninja immediately)
+                if (nowK && !prevK) currentSim.appSuicide(0)
+
+                // R → instant restart
+                if (nowR && !prevR) {
+                    appState.levelFailed(episode, level, startingTicks); return
+                }
+
+                // Fixed-step physics + timer
+                accumulator += safeDelta
+                while (accumulator >= TICK_DT) {
+                    currentSim.tick()
+
+                    // Timer: decrement then apply gold bonus (mirrors AS3 tickSimulator order)
+                    currentTicks--
+                    if (currentTicks <= 0) {
+                        currentTicks = 0
+                        if (!timerCalledTimeUp) {
+                            timerCalledTimeUp = true
+                            currentSim.appTimeUp()
+                        }
+                    } else {
+                        currentTicks += currentSim.appGetGoldCollectedThisTick(0) * SimGlobals.TICKS_PER_GOLD
+                    }
+
+                    accumulator -= TICK_DT
+                }
+
+                // Check for end-of-level (win or death)
+                if (currentSim.appIsGameDone()) {
+                    if (currentSim.appDidPlayerWin()) {
+                        appState.levelComplete(episode, level, currentTicks)
+                        return
+                    } else {
+                        playState        = PlayState.POST_GAME
+                        postGameCooldown = POST_GAME_COOLDOWN
+                    }
+                }
+            }
+
+            PlayState.PAUSED -> {
+                // Q → quit to menu
+                if (nowQ && !prevQ) { appState.goToMenu(); return }
+                // Jump or ESC → resume
+                if ((nowJump && !prevJump) || (nowPause && !prevPause)) {
+                    playState = PlayState.GAME
+                    audio.resume()
+                }
+            }
+
+            PlayState.POST_GAME -> {
+                audio.tick()
+
+                // Keep ticking sim so the ragdoll simulates
+                accumulator += safeDelta
+                while (accumulator >= TICK_DT) {
+                    currentSim.tick()
+                    accumulator -= TICK_DT
+                }
+
+                // Cooldown before accepting any input (prevents accidental instant-retry)
+                if (postGameCooldown > 0) {
+                    postGameCooldown--
+                } else {
+                    // Jump → retry same level with the timer value it had at level start
+                    if (nowJump && !prevJump) {
+                        appState.levelFailed(episode, level, startingTicks); return
+                    }
+                    // ESC → quit to menu
+                    if (nowPause && !prevPause) { appState.goToMenu(); return }
+                }
             }
         }
 
-        // --- Render ---
-        renderer.render(currentSim)
+        prevJump  = nowJump
+        prevPause = nowPause
+        prevK     = nowK
+        prevQ     = nowQ
+        prevR     = nowR
 
-        // --- Level completion (debounced one frame to let renderer show final state) ---
-        if (levelDone) {
-            levelDone = false
-            if (currentSim.appDidPlayerWin()) appState.levelComplete(episode, level)
-            else                              appState.levelFailed(episode, level)
-            return
-        }
-        if (currentSim.appIsGameDone()) levelDone = true
+        renderer.render(currentSim, playState, currentTicks, startingTicks)
     }
 
     override fun resize(width: Int, height: Int) {
@@ -107,13 +210,15 @@ class GameScreen(
     }
 
     override fun pause() {
-        paused = true
+        if (playState == PlayState.GAME) {
+            playState = PlayState.PAUSED
+        }
         audio.pause()
     }
 
     override fun resume() {
         audio.resume()
-        // Keep paused = true; player unpauses explicitly with Escape
+        // Stay in PAUSED; player unpauses explicitly with Jump or ESC
     }
 
     override fun hide() {}
@@ -141,8 +246,10 @@ class GameScreen(
             audio        = audio
         )
         sim!!.appEnableAllPlayers()
-        accumulator = 0f
-        levelDone   = false
-        paused      = false
+        currentTicks      = startingTicks
+        timerCalledTimeUp = false
+        accumulator       = 0f
+        playState         = PlayState.PRE_GAME
+        prevJump = false; prevPause = false; prevK = false; prevQ = false; prevR = false
     }
 }

@@ -77,7 +77,7 @@ class LibGdxAudioManager : AudioManager {
             "shot2"     to "sounds/734.wav",  // "smashed die"
 
             // Entity one-shot sounds (triggered via playSoundEntity from entity state changes)
-            "launchpad"      to "sounds/530.wav",
+            "launchpad"      to "sounds/898.wav",
             "mine_explode"   to "sounds/950.wav",
             "rocket_fire"    to "sounds/948.wav",
             "turret_prefire" to "sounds/907.wav",

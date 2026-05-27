@@ -1,5 +1,7 @@
 package com.nplus.screens
 
+import com.nplus.SimGlobals
+
 /**
  * Application-level state machine for N+.
  *
@@ -12,7 +14,12 @@ sealed class AppState {
 
     /**
      * Active gameplay for a specific episode and level.
-     * [episode] and [level] are 0-based indices into the level catalogue.
+     * [startingTicks] carries the timer value from the previous level so it
+     * persists across retries and advances to the next level within an episode.
      */
-    data class Playing(val episode: Int, val level: Int) : AppState()
+    data class Playing(
+        val episode: Int,
+        val level: Int,
+        val startingTicks: Int = SimGlobals.DEFAULT_TIMER_TICKS
+    ) : AppState()
 }

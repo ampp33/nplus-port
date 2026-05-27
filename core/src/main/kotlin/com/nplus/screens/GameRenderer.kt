@@ -4,13 +4,19 @@ import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.GL20
 import com.badlogic.gdx.graphics.OrthographicCamera
+import com.badlogic.gdx.graphics.Texture
+import com.badlogic.gdx.graphics.g2d.BitmapFont
+import com.badlogic.gdx.graphics.g2d.GlyphLayout
 import com.badlogic.gdx.graphics.g2d.SpriteBatch
 import com.badlogic.gdx.graphics.g2d.TextureAtlas
 import com.badlogic.gdx.graphics.g2d.TextureRegion
+import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator
+import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator.FreeTypeFontParameter
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType
 import com.badlogic.gdx.utils.Disposable
 import com.badlogic.gdx.utils.viewport.ExtendViewport
+import com.nplus.SimGlobals
 import com.nplus.physics.Ninja
 import com.nplus.physics.Simulator
 import com.nplus.physics.entities.*
@@ -44,6 +50,18 @@ class GameRenderer : Disposable {
 
         // Turret: 17 frames cover 0..2π
         private const val TURRET_FRAMES = 17
+
+        // Timer bar (drawn just above the level interior at y = WORLD_H)
+        // BAR_H must be large enough to fit the 16 px timer font (≈ 16 world units) with padding.
+        private const val BAR_H = 22f
+        // BAR_NORMAL_W = bar width at fraction 1.0 (current == starting ticks).
+        // Matches the original timebar sprite proportion: 624 px of content on a ~800 px stage ≈ 78%.
+        // Leaving ~22% of WORLD_W on the right so gold overflow can extend the fill visually.
+        private val BAR_NORMAL_W = WORLD_W * 0.78f   // ≈ 617 units; gold extends beyond this
+
+        // Overlay dim
+        private val COL_DIM        = Color(0f, 0f, 0f, 0.60f)
+        private val COL_TEXT       = Color(1f, 1f, 1f, 1f)
     }
 
     private val camera   = OrthographicCamera()
@@ -79,8 +97,14 @@ class GameRenderer : Disposable {
     private val ninjaRunState = mutableMapOf<Ninja, NinjaRunState>()
 
     // Tracks last observed state per ninja to detect STANDING entry for the settle animation
-    private val ninjaLastState     = mutableMapOf<Ninja, Ninja.State>()
+    private val ninjaLastState      = mutableMapOf<Ninja, Ninja.State>()
     private val ninjaStandEntryTime = mutableMapOf<Ninja, Float>()
+
+    // Timer bar font (uni05, 16 px) — shows the formatted time value inside the bar
+    private lateinit var timerFont: BitmapFont
+    // Overlay / HUD font (uni05 pixel font, 20 px) — PRE_GAME / PAUSED / POST_GAME prompts
+    private lateinit var overlayFont: BitmapFont
+    private val glyphLayout = GlyphLayout()
 
     init {
         camera.setToOrtho(false, 1280f, 720f)
@@ -101,6 +125,25 @@ class GameRenderer : Disposable {
                 ?: error("Atlas missing region: tiles/${t + 1}")
             TextureRegion(r.texture, r.regionX + 24, r.regionY + 24, 24, 24)
         }
+        val gen16 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_16.ttf"))
+        timerFont = gen16.generateFont(FreeTypeFontParameter().apply {
+            size      = 16
+            mono      = true
+            minFilter = Texture.TextureFilter.Nearest
+            magFilter = Texture.TextureFilter.Nearest
+            color     = Color.WHITE
+        })
+        gen16.dispose()
+
+        val gen20 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_20.ttf"))
+        overlayFont = gen20.generateFont(FreeTypeFontParameter().apply {
+            size      = 20
+            mono      = true
+            minFilter = Texture.TextureFilter.Nearest
+            magFilter = Texture.TextureFilter.Nearest
+            color     = Color.WHITE
+        })
+        gen20.dispose()
     }
 
     /** Look up a 1-based frame. Ninja frames come from the Linear-filtered ninja atlas. */
@@ -131,7 +174,12 @@ class GameRenderer : Disposable {
         camera.update()
     }
 
-    fun render(sim: Simulator) {
+    fun render(
+        sim:          Simulator,
+        playState:    PlayState    = PlayState.GAME,
+        currentTicks: Int          = SimGlobals.DEFAULT_TIMER_TICKS,
+        startingTicks: Int         = SimGlobals.DEFAULT_TIMER_TICKS
+    ) {
         stateTime += Gdx.graphics.deltaTime
 
         Gdx.gl.glClearColor(COL_BG.r, COL_BG.g, COL_BG.b, 1f)
@@ -161,7 +209,6 @@ class GameRenderer : Disposable {
 
         // Pass 2: FULL (type-1) solid walls — drawn after entities so entity pixels
         // that overlap into a solid tile are correctly hidden behind the wall.
-        // TileTypes.FULL has a transparent sprite; we paint it as a solid rect here.
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = COL_BG
@@ -182,6 +229,121 @@ class GameRenderer : Disposable {
         shape.begin(ShapeType.Filled)
         for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja)
         shape.end()
+
+        // Pass 5: timer bar (always visible, drawn above the level interior).
+        drawTimerBar(currentTicks, startingTicks)
+
+        // Pass 6: dim overlay + prompt text for non-GAME states.
+        if (playState != PlayState.GAME) drawOverlay(playState)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Timer bar
+    // ---------------------------------------------------------------------------
+
+    private fun drawTimerBar(currentTicks: Int, startingTicks: Int) {
+        // Unclamped fraction so gold overflow (fraction > 1.0) is visible
+        val fraction = if (startingTicks > 0) currentTicks.toFloat() / startingTicks.toFloat() else 0f
+
+        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends it up to WORLD_W
+        val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W)
+
+        shape.projectionMatrix = camera.combined
+        shape.begin(ShapeType.Filled)
+        shape.color = barFillColor(fraction)
+        if (fillW > 0f) shape.rect(0f, WORLD_H, fillW, BAR_H)
+        shape.end()
+
+        // Timer number: "90.000" style, centered over the normal track
+        val text = formatTimer(currentTicks)
+        glyphLayout.setText(timerFont, text)
+        val tx = (BAR_NORMAL_W - glyphLayout.width) / 2f
+        val ty = WORLD_H + (BAR_H + timerFont.lineHeight) / 2f
+        batch.projectionMatrix = camera.combined
+        batch.begin()
+        timerFont.color = COL_TEXT
+        timerFont.draw(batch, text, tx, ty)
+        batch.end()
+    }
+
+    /**
+     * Color matches the original TimeBar MovieClip gradient (reverse-engineered from sprite frames).
+     *
+     * Frames 1–502 (fraction 0→1): bar grows, color: dark-red → magenta → dark-blue
+     *   - 0.0→0.5: R=136/255, G=34/255, B rises  54→136/255
+     *   - 0.5→1.0: R drops 136→34/255, G=34/255, B=136/255
+     * Frames 502–750 (fraction 1→1.5): bar full, stays dark-blue  (34, 34, 136)/255
+     * Frames 750–1004 (fraction 1.5→2.0+): bar full, shifts to cyan (170, 253, 253)/255
+     */
+    private fun barFillColor(fraction: Float): Color {
+        fun lf(a: Float, b: Float, t: Float) = a + (b - a) * t.coerceIn(0f, 1f)
+        return when {
+            fraction <= 0.5f -> {
+                val t = fraction / 0.5f
+                Color(136/255f, 34/255f, lf(54/255f, 136/255f, t), 1f)
+            }
+            fraction <= 1.0f -> {
+                val t = (fraction - 0.5f) / 0.5f
+                Color(lf(136/255f, 34/255f, t), 34/255f, 136/255f, 1f)
+            }
+            fraction <= 1.5f -> Color(34/255f, 34/255f, 136/255f, 1f)   // dark blue plateau
+            else -> {
+                val t = (fraction - 1.5f) / 0.5f
+                Color(lf(34/255f, 170/255f, t), lf(34/255f, 253/255f, t), lf(136/255f, 253/255f, t), 1f)
+            }
+        }
+    }
+
+    /** Format ticks as "seconds.milliseconds" matching the original TimeFormatter output. */
+    private fun formatTimer(ticks: Int): String {
+        val totalSeconds = ticks.toDouble() / SimGlobals.SIM_RATE
+        val intPart = totalSeconds.toInt()
+        val fracPart = ((totalSeconds - intPart) * 1000).toInt()
+        return "$intPart.${fracPart.toString().padStart(3, '0')}"
+    }
+
+    // ---------------------------------------------------------------------------
+    // State overlays (PRE_GAME / PAUSED / POST_GAME)
+    // ---------------------------------------------------------------------------
+
+    private fun drawOverlay(playState: PlayState) {
+        // Dim the level
+        shape.projectionMatrix = camera.combined
+        shape.begin(ShapeType.Filled)
+        shape.color = COL_DIM
+        shape.rect(0f, 0f, WORLD_W, WORLD_H)
+        shape.end()
+
+        // Choose prompt lines
+        val line1 = when (playState) {
+            PlayState.PRE_GAME  -> "PRESS JUMP TO BEGIN"
+            PlayState.PAUSED    -> "PAUSED"
+            PlayState.POST_GAME -> "PRESS JUMP TO RETRY"
+            else                -> return
+        }
+        val line2 = when (playState) {
+            PlayState.PAUSED    -> "PRESS Q TO QUIT"
+            else                -> null
+        }
+
+        batch.projectionMatrix = camera.combined
+        batch.begin()
+        overlayFont.color = COL_TEXT
+
+        val lineH = overlayFont.lineHeight
+        val totalH = lineH * (if (line2 != null) 2 else 1)
+        var y = WORLD_H / 2f + totalH / 2f
+
+        glyphLayout.setText(overlayFont, line1)
+        overlayFont.draw(batch, line1, (WORLD_W - glyphLayout.width) / 2f, y)
+
+        if (line2 != null) {
+            y -= lineH * 1.6f
+            glyphLayout.setText(overlayFont, line2)
+            overlayFont.draw(batch, line2, (WORLD_W - glyphLayout.width) / 2f, y)
+        }
+
+        batch.end()
     }
 
     override fun dispose() {
@@ -189,6 +351,8 @@ class GameRenderer : Disposable {
         batch.dispose()
         atlas.dispose()
         ninjaAtlas.dispose()
+        if (::timerFont.isInitialized)  timerFont.dispose()
+        if (::overlayFont.isInitialized) overlayFont.dispose()
     }
 
     // ---------------------------------------------------------------------------
@@ -364,7 +528,11 @@ class GameRenderer : Disposable {
 
             is OnewayPlatformEntity -> {
                 val n = e.getNormal()
-                drawRotated(fr("oneway", 1), e.getPos().x, e.getPos().y, -normalAngleDeg(n.x, n.y))
+                val halfThick = 2.5f
+                drawRotated(fr("oneway", 1),
+                    e.getPos().x - n.x * halfThick,
+                    e.getPos().y - n.y * halfThick,
+                    -normalAngleDeg(n.x, n.y) + 180f)
             }
 
             is DoorRegular -> if (!e.isOpen()) {
