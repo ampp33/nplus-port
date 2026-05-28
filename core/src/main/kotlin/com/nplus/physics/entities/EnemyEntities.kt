@@ -248,19 +248,22 @@ class TurretEntity(x: Float, y: Float) : EntityBase() {
                 }
                 2 -> { // prefire
                     shotTimer++
-                    if (shotTimer >= prefireDelay && !target.isDead()) {
-                        val dx = aimPos.x - pos.x; val dy = aimPos.y - pos.y
-                        val len = sqrt(dx*dx + dy*dy); val nx = dx/len; val ny = dy/len
-                        val dist = sim.segGrid.getRaycastDistance(pos.x, pos.y, nx, ny, hitPos, hitN)
-                        for (i in sim.players.indices) {
-                            val p = sim.players[i]; if (p.isDead()) continue
-                            if (ColUtils.overlapCircleVsSegment(p.getPos(), p.getRadius(), pos, hitPos, dist)) {
-                                val proj = nx * (p.getPos().x - pos.x) + ny * (p.getPos().y - pos.y)
-                                sim.eventPlayerWasKilled(p, SimGlobals.ENEMYTYPE_TURRET,
-                                    pos.x + proj*nx, pos.y + proj*ny, nx*8f, ny*8f)
+                    if (shotTimer >= prefireDelay) {
+                        // AS3: always transition to postfire; only fire if target is still alive
+                        if (!target.isDead()) {
+                            val dx = aimPos.x - pos.x; val dy = aimPos.y - pos.y
+                            val len = sqrt(dx*dx + dy*dy); val nx = dx/len; val ny = dy/len
+                            val dist = sim.segGrid.getRaycastDistance(pos.x, pos.y, nx, ny, hitPos, hitN)
+                            for (i in sim.players.indices) {
+                                val p = sim.players[i]; if (p.isDead()) continue
+                                if (ColUtils.overlapCircleVsSegment(p.getPos(), p.getRadius(), pos, hitPos, dist)) {
+                                    val proj = nx * (p.getPos().x - pos.x) + ny * (p.getPos().y - pos.y)
+                                    sim.eventPlayerWasKilled(p, SimGlobals.ENEMYTYPE_TURRET,
+                                        pos.x + proj*nx, pos.y + proj*ny, nx*8f, ny*8f)
+                                }
                             }
+                            sim.spawnTurretBullet(pos.x, pos.y, hitPos.x, hitPos.y)
                         }
-                        sim.spawnTurretBullet(pos.x, pos.y, hitPos.x, hitPos.y)
                         shotTimer = 0f; curState = 3
                     }
                 }
@@ -285,8 +288,9 @@ class TurretEntity(x: Float, y: Float) : EntityBase() {
         val py = targetPos.y + targetVel.y * predScale
         val dx = px - aimPos.x; val dy = py - aimPos.y
         val distSq = dx*dx + dy*dy
-        aimRegion = (threshold2.indexOfFirst { distSq <= it }.takeIf { it >= 0 } ?: threshold2.size)
-            .coerceAtMost(aimSpeed.size - 1)
+        // AS3: start at 0, increment while distSq <= threshold[i] (thresholds are decreasing).
+        // count { distSq <= it } is equivalent: counts 0..3 matching entries.
+        aimRegion = threshold2.count { distSq <= it }
         shotTimer += timerStep[aimRegion]
         aimPos.x += aimSpeed[aimRegion] * dx; aimPos.y += aimSpeed[aimRegion] * dy
     }
@@ -295,6 +299,8 @@ class TurretEntity(x: Float, y: Float) : EntityBase() {
     fun getAimPos(): Vec2 = aimPos
     fun getState() = curState
     fun getAimRegion() = aimRegion
+    /** 0.0 (just entered prefire) → 1.0 (fully charged, about to fire). Only meaningful in state 2. */
+    fun getPrefireProgress(): Float = (shotTimer / prefireDelay).coerceIn(0f, 1f)
 }
 
 // ---------------------------------------------------------------------------

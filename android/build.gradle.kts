@@ -9,7 +9,7 @@ val controllersVersion: String by project
 val natives: Configuration by configurations.creating
 
 android {
-    namespace = "com.nplus"
+    namespace = "com.nplus.android"
     compileSdk = 34
 
     defaultConfig {

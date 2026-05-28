@@ -85,14 +85,14 @@ class LibGdxAudioManager : AudioManager {
             "drone_chase"    to "sounds/953.wav",
             "laser_charge"   to "sounds/957.wav",
             "exit_switch"    to "sounds/973.wav",
-            // "door_open"   to "sounds/910.wav",  // 910.wav absent from assets — TODO
+            "door_open"      to "sounds/983.wav",  // 910.wav absent from assets — TODO
         )
 
         // Loop sounds — playerLoopMC (symbol 712), embedded sounds 710–711.
         // Best-guess assignment: verify by ear.
         val LOOP_MAP: Map<String, String> = mapOf(
             "wallslide" to "sounds/710.wav",
-            "skid"      to "sounds/711.wav",
+            "skid"      to "sounds/710.wav",
         )
 
         /** All effect file paths that should be preloaded on startup. */

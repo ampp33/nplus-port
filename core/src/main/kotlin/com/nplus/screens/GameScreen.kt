@@ -64,6 +64,9 @@ class GameScreen(
     private var currentTicks       = startingTicks
     private var timerCalledTimeUp  = false   // guard: only call appTimeUp() once
 
+    // --- Level info label (e.g. "00-0: straight forward") ---
+    private var levelLabel         = ""
+
     // --- Fixed-step accumulator ---
     private var accumulator        = 0f
 
@@ -202,7 +205,7 @@ class GameScreen(
         prevQ     = nowQ
         prevR     = nowR
 
-        renderer.render(currentSim, playState, currentTicks, startingTicks)
+        renderer.render(currentSim, playState, currentTicks, startingTicks, levelLabel)
     }
 
     override fun resize(width: Int, height: Int) {
@@ -239,6 +242,7 @@ class GameScreen(
             appState.goToMenu()
             return
         }
+        levelLabel = data.name
         Gdx.app.log("GameScreen", "ep=$episode lv=$level: ${data.name}")
         sim = LevelBuilder.build(
             data         = data,

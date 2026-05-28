@@ -119,6 +119,7 @@ class DoorLocked(
     override fun onCollision(sim: Simulator) {
         objGrid.entityRemove(this)
         changeDoorState(true)
+        sim.playSoundEntity("door_open")
     }
 
     fun getDoorPos() = getDoorCentre()
@@ -141,6 +142,7 @@ class DoorTrap(
     override fun onCollision(sim: Simulator) {
         objGrid.entityRemove(this)
         changeDoorState(false)
+        sim.playSoundEntity("door_open")
     }
 
     fun getDoorPos() = getDoorCentre()

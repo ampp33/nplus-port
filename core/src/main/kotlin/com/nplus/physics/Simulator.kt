@@ -194,6 +194,9 @@ open class Simulator(
         data class Blood(val x: Float, val y: Float, val vx: Float, val vy: Float, val count: Int) : SpawnEvent()
         data class RocketSmoke(val x: Float, val y: Float, val angleDeg: Float) : SpawnEvent()
         data class Explosion(val x: Float, val y: Float) : SpawnEvent()
+        data class Zap(val x: Float, val y: Float, val angleDeg: Float) : SpawnEvent()
+        data class ZapThwompH(val x: Float, val y: Float, val vx: Float, val vy: Float) : SpawnEvent()
+        data class ZapThwompV(val x: Float, val y: Float, val vx: Float, val vy: Float) : SpawnEvent()
     }
 
     val pendingSpawns = mutableListOf<SpawnEvent>()
@@ -203,9 +206,9 @@ open class Simulator(
     // -----------------------------------------------------------------------
 
     open fun spawnExplosion(x: Float, y: Float) { pendingSpawns += SpawnEvent.Explosion(x, y) }
-    open fun spawnZap(x: Float, y: Float, angleDeg: Float) {}
-    open fun spawnZapThwompH(x: Float, y: Float, vx: Float, vy: Float) {}
-    open fun spawnZapThwompV(x: Float, y: Float, vx: Float, vy: Float) {}
+    open fun spawnZap(x: Float, y: Float, angleDeg: Float) { pendingSpawns += SpawnEvent.Zap(x, y, angleDeg) }
+    open fun spawnZapThwompH(x: Float, y: Float, vx: Float, vy: Float) { pendingSpawns += SpawnEvent.ZapThwompH(x, y, vx, vy) }
+    open fun spawnZapThwompV(x: Float, y: Float, vx: Float, vy: Float) { pendingSpawns += SpawnEvent.ZapThwompV(x, y, vx, vy) }
     open fun spawnRocketSmoke(x: Float, y: Float, angleDeg: Float) { pendingSpawns += SpawnEvent.RocketSmoke(x, y, angleDeg) }
     open fun spawnTurretBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}
     open fun spawnChainBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}

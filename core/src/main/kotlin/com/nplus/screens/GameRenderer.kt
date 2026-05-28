@@ -46,12 +46,19 @@ class GameRenderer : Disposable {
         private const val FPS_DRONE        = 8f
         private const val FPS_ROCKET       = 30f
 
-        // Turret: 17 frames cover 0..2π
-        private const val TURRET_FRAMES = 17
+        // Turret base: 17 animation frames.
+        //   Frame 1       = idle (darkest)
+        //   Frames 2–8    = prefire charge-up (progressively brighter)
+        //   Frames 9–11   = peak / just-fired (brightest, identical pixels)
+        //   Frames 12–17  = postfire recovery (dims back to frame 1)
+        // Turret crosshair: 6 frames (aim_far=1, aim_mid=2, aim_near=3, prefire=4, aim_off≈5, hidden=6)
+        private const val TURRET_PREFIRE_CHARGE_START = 2
+        private const val TURRET_PREFIRE_CHARGE_END   = 8
+        private const val TURRET_POSTFIRE_FRAME       = 9
 
         // Timer bar (drawn just above the level interior at y = WORLD_H)
-        // BAR_H must be large enough to fit the 16 px timer font (≈ 16 world units) with padding.
-        private const val BAR_H = 22f
+        // Original TimeBar sprite is 625×12 px, so BAR_H = 12 world units.
+        private const val BAR_H = 12f
         // BAR_NORMAL_W = bar width at fraction 1.0 (current == starting ticks).
         // Matches the original timebar sprite proportion: 624 px of content on a ~800 px stage ≈ 78%.
         // Leaving ~22% of WORLD_W on the right so gold overflow can extend the fill visually.
@@ -149,25 +156,17 @@ class GameRenderer : Disposable {
                 ?: error("Atlas missing region: tiles/${t + 1}")
             TextureRegion(r.texture, r.regionX + 24, r.regionY + 24, 24, 24)
         }
-        val gen16 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_16.ttf"))
-        timerFont = gen16.generateFont(FreeTypeFontParameter().apply {
-            size      = 16
+        val gen8 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_8.ttf"))
+        val p8 = FreeTypeFontParameter().apply {
+            size      = 8
             mono      = true
             minFilter = Texture.TextureFilter.Nearest
             magFilter = Texture.TextureFilter.Nearest
             color     = Color.WHITE
-        })
-        gen16.dispose()
-
-        val gen20 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_20.ttf"))
-        overlayFont = gen20.generateFont(FreeTypeFontParameter().apply {
-            size      = 20
-            mono      = true
-            minFilter = Texture.TextureFilter.Nearest
-            magFilter = Texture.TextureFilter.Nearest
-            color     = Color.WHITE
-        })
-        gen20.dispose()
+        }
+        timerFont   = gen8.generateFont(p8)
+        overlayFont = gen8.generateFont(p8)
+        gen8.dispose()
     }
 
     /** Look up a 1-based frame. Ninja frames come from the Linear-filtered ninja atlas. */
@@ -202,7 +201,8 @@ class GameRenderer : Disposable {
         sim:          Simulator,
         playState:    PlayState    = PlayState.GAME,
         currentTicks: Int          = SimGlobals.DEFAULT_TIMER_TICKS,
-        startingTicks: Int         = SimGlobals.DEFAULT_TIMER_TICKS
+        startingTicks: Int         = SimGlobals.DEFAULT_TIMER_TICKS,
+        levelLabel:   String       = ""
     ) {
         val dt = Gdx.graphics.deltaTime
         if (playState != PlayState.PRE_GAME) stateTime += dt
@@ -240,9 +240,12 @@ class GameRenderer : Disposable {
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = COL_BG
+        // Expand each tile by 0.5 units on all sides so adjacent tiles share pixels,
+        // preventing 1px background bleed on high-DPI Android screens.
+        val E = 0.5f
         for (row in 0 until rows) for (col in 0 until cols) {
             if (sim.tileGrid[col + row * cols] != TileTypes.FULL) continue
-            shape.rect(col * cs, fy((row + 1) * cs), cs, cs)
+            shape.rect(col * cs - E, fy((row + 1) * cs) - E, cs + 2 * E, cs + 2 * E)
         }
         shape.end()
 
@@ -262,7 +265,10 @@ class GameRenderer : Disposable {
         // Pass 5: timer bar (always visible, drawn above the level interior).
         drawTimerBar(currentTicks, startingTicks)
 
-        // Pass 6: dim overlay + prompt text for non-GAME states.
+        // Pass 6: level label in bottom-left corner of the level area.
+        if (levelLabel.isNotEmpty()) drawLevelLabel(levelLabel)
+
+        // Pass 7: dim overlay + prompt text for non-GAME states.
         if (playState != PlayState.GAME) drawOverlay(playState)
     }
 
@@ -274,24 +280,36 @@ class GameRenderer : Disposable {
         // Unclamped fraction so gold overflow (fraction > 1.0) is visible
         val fraction = if (startingTicks > 0) currentTicks.toFloat() / startingTicks.toFloat() else 0f
 
-        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends it up to WORLD_W
-        val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W)
+        // Reserve space on the left for the timer number. Measure the widest possible
+        // text ("0000.000") once to get a stable, non-shifting bar start position.
+        glyphLayout.setText(timerFont, "0000.000")
+        val numAreaW = glyphLayout.width + 8f   // 8 units gap between number and bar
+
+        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends to right edge
+        val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W - numAreaW)
 
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = barFillColor(fraction)
-        if (fillW > 0f) shape.rect(0f, WORLD_H, fillW, BAR_H)
+        if (fillW > 0f) shape.rect(numAreaW, WORLD_H, fillW, BAR_H)
         shape.end()
 
-        // Timer number: centered in the full bar area
+        // Timer number: left-aligned, to the left of the bar
         val text = formatTimer(currentTicks)
-        glyphLayout.setText(timerFont, text)
-        val tx = (WORLD_W - glyphLayout.width) / 2f
         val ty = WORLD_H + BAR_H / 2f + timerFont.capHeight / 2f
         batch.projectionMatrix = camera.combined
         batch.begin()
         timerFont.color = COL_TIMER_TEXT
-        timerFont.draw(batch, text, tx, ty)
+        timerFont.draw(batch, text, 4f, ty)
+        batch.end()
+    }
+
+    private fun drawLevelLabel(label: String) {
+        val ty = timerFont.capHeight + 4f   // small margin above y=0
+        batch.projectionMatrix = camera.combined
+        batch.begin()
+        timerFont.color = COL_MODAL_TEXT
+        timerFont.draw(batch, label, 4f, ty)
         batch.end()
     }
 
@@ -323,12 +341,12 @@ class GameRenderer : Disposable {
         }
     }
 
-    /** Format ticks as "seconds.milliseconds" matching the original TimeFormatter output. */
+    /** Format ticks matching original TimeFormatter: 4-char space-padded seconds + "." + 3-char millis. */
     private fun formatTimer(ticks: Int): String {
         val totalSeconds = ticks.toDouble() / SimGlobals.SIM_RATE
         val intPart = totalSeconds.toInt()
         val fracPart = ((totalSeconds - intPart) * 1000).toInt()
-        return "$intPart.${fracPart.toString().padStart(3, '0')}"
+        return intPart.toString().padStart(4, ' ') + "." + fracPart.toString().padStart(3, '0')
     }
 
     // ---------------------------------------------------------------------------
@@ -359,8 +377,8 @@ class GameRenderer : Disposable {
         }
         val lineCount = if (line2 != null) 2 else 1
         val textH = capH * lineCount + lineGap * (lineCount - 1)
-        val padX  = 28f
-        val padY  = 20f
+        val padX  = 14f
+        val padY  = 8f
         val boxW  = maxTextW + padX * 2f
         val boxH  = textH + padY * 2f
         val boxX  = (WORLD_W - boxW) / 2f
@@ -517,7 +535,14 @@ class GameRenderer : Disposable {
             }
 
             is ThwompEntity -> {
-                drawCentered(fr("thwomp", 1), e.getPos().x, e.getPos().y)
+                // AS3: mc.rotation = _loc1_ * 180/PI where _loc1_ depends on isHorizontal/fallDir.
+                // Convert Flash CW degrees → libGDX CCW degrees by negating.
+                val flashAngle = if (e.isHorizontal()) {
+                    if (e.getFallDir() < 0) 180f else 0f
+                } else {
+                    if (e.getFallDir() < 0) 270f else 90f
+                }
+                drawRotated(fr("thwomp", 1), e.getPos().x, e.getPos().y, -flashAngle)
             }
 
             is BounceBlockEntity -> {
@@ -529,14 +554,36 @@ class GameRenderer : Disposable {
             }
 
             is TurretEntity -> {
-                val ap  = e.getAimPos()
-                val pos = e.getPos()
-                // atan2 in game y-down: negate y delta to get math-space angle
-                val angle = atan2(-(ap.y - pos.y), ap.x - pos.x)
-                // Map angle (-π..π) → frame 1..17
-                val norm = ((angle / (2 * Math.PI) + 1.0) % 1.0)
-                val idx  = (norm * TURRET_FRAMES).toInt().coerceIn(0, TURRET_FRAMES - 1)
-                drawCentered(fr("turret", idx + 1), pos.x, pos.y)
+                val pos   = e.getPos()
+                val ap    = e.getAimPos()
+                val state = e.getState()
+
+                // Base sprite: state-driven animation frame (never rotates; crosshair shows aim).
+                //   State 0/1 (idle/targeting): frame 1 (dark)
+                //   State 2   (prefire):        frames 2–8 based on charge progress
+                //   State 3   (postfire):       frame 9 (peak brightness, just fired)
+                val baseFrame = when (state) {
+                    2 -> {
+                        val progress = e.getPrefireProgress()
+                        val span = TURRET_PREFIRE_CHARGE_END - TURRET_PREFIRE_CHARGE_START
+                        (TURRET_PREFIRE_CHARGE_START + (progress * span).toInt())
+                            .coerceIn(TURRET_PREFIRE_CHARGE_START, TURRET_PREFIRE_CHARGE_END)
+                    }
+                    3 -> TURRET_POSTFIRE_FRAME
+                    else -> 1
+                }
+                drawCentered(fr("turret", baseFrame), pos.x, pos.y)
+
+                // Crosshair sprite: drawn at aim position.
+                //   Frame 1 = aim_far, 2 = aim_mid, 3 = aim_near, 4 = prefire, 5+ = hidden
+                val crosshairFrame = when (state) {
+                    1 -> (e.getAimRegion() + 1).coerceIn(1, 3)  // region 0→1, 1→2, 2→3, 3→3
+                    2 -> 4                                        // prefire: locked-on glow
+                    else -> 0                                     // 0 = don't draw
+                }
+                if (crosshairFrame > 0) {
+                    drawCentered(fr("turret_crosshair", crosshairFrame), ap.x, ap.y)
+                }
             }
 
             is RocketEntity -> {
@@ -554,6 +601,7 @@ class GameRenderer : Disposable {
 
             is DroneChaser -> {
                 drawCentered(cycled("drone_chaser", 3, FPS_DRONE), e.pos.x, e.pos.y)
+                drawRotated(fr("drone_eye", 1), e.pos.x, e.pos.y, -Math.toDegrees(e.gfxOrn.toDouble()).toFloat())
             }
 
             is DroneZap -> {
@@ -566,6 +614,7 @@ class GameRenderer : Disposable {
 
             is DroneChaingun -> {
                 drawCentered(cycled("drone_chaingun", 7, FPS_DRONE), e.pos.x, e.pos.y)
+                drawRotated(fr("drone_chaingun_eye", 1), e.pos.x, e.pos.y, -Math.toDegrees(e.gfxOrn.toDouble()).toFloat())
             }
 
             is LaunchpadEntity -> {
@@ -576,7 +625,13 @@ class GameRenderer : Disposable {
                     ((stateTime - t) * FPS_LAUNCHPAD).toInt().coerceIn(0, 18) + 1
                 else
                     1
-                drawRotated(fr("launchpad", frame), e.getPos().x, e.getPos().y, -normalAngleDeg(n.x, n.y))
+                val reg = fr("launchpad", frame)
+                val h = reg.regionHeight.toFloat()
+                // Flash registration at left-center (0, h/2): sprite extends along the normal direction.
+                // Using +normalAngleDeg (not negated) with origin at left edge correctly maps the
+                // sprite's x-extent (its 5px narrow dimension) outward along the surface normal.
+                batch.draw(reg, e.getPos().x, fy(e.getPos().y) - h / 2f,
+                    0f, h / 2f, reg.regionWidth.toFloat(), h, 1f, 1f, normalAngleDeg(n.x, n.y))
             }
 
             is OnewayPlatformEntity -> {
@@ -725,9 +780,9 @@ class GameRenderer : Disposable {
         while (iter.hasNext()) {
             val e = iter.next()
             e.elapsed += dt
-            val totalDuration = e.frameCount / 30f
+            val totalDuration = e.frameCount / 40f
             if (e.elapsed >= totalDuration) { iter.remove(); continue }
-            val frame = ((e.elapsed * 30f).toInt() + 1).coerceIn(1, e.frameCount)
+            val frame = ((e.elapsed * 40f).toInt() + 1).coerceIn(1, e.frameCount)
             val reg = fxAtlas.findRegion("${e.dir}/$frame") ?: continue
             batch.draw(reg,
                 e.x - e.originX, fy(e.y) - e.originY,
@@ -832,6 +887,53 @@ class GameRenderer : Disposable {
                             w = absW, h = absH,
                             sx = 1f, sy = 1f,
                             originX = absW, originY = absH / 2f)
+                    }
+                }
+                // --- Zap: 5 fx_zap* sprites, centred at contact point, angled toward normal ---
+                is Simulator.SpawnEvent.Zap -> {
+                    repeat(5) {
+                        val v = (rnd() * 3).toInt().coerceIn(0, 2)
+                        val dir = "fx_zap$v"
+                        val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
+                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val sx = (30 + rnd() * 30) / 100f; val sy = (30 + rnd() * 20) / 100f
+                        val rot = e.angleDeg + 20f * (rnd() * 2f - 1f)
+                        effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
+                            rotation = -rot, w = sx*nw, h = sy*nh, sx = 1f, sy = 1f,
+                            originX = sx*nw/2f, originY = sy*nh/2f)
+                    }
+                }
+                // --- ZapThwompH: 5 fx_zap* sprites spread along thwomp face ---
+                is Simulator.SpawnEvent.ZapThwompH -> {
+                    repeat(5) {
+                        val v = (rnd() * 3).toInt().coerceIn(0, 2)
+                        val dir = "fx_zap$v"
+                        val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
+                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val px = e.x + e.vx; val py = e.y - e.vy + e.vy * rnd()
+                        val sx = (4f * e.vx + 20f * (rnd() * 2f - 1f)) / 100f
+                        val sy = (60 + 60 * rnd()) / 100f
+                        effects += SpriteEffect(dir, fc, 0f, px, py,
+                            rotation = 0f, w = abs(sx)*nw, h = sy*nh, sx = if (sx>=0) 1f else -1f, sy = 1f,
+                            originX = abs(sx)*nw/2f, originY = sy*nh/2f)
+                    }
+                }
+                // --- ZapThwompV: 5 fx_zapv* sprites spread along thwomp face ---
+                is Simulator.SpawnEvent.ZapThwompV -> {
+                    repeat(5) {
+                        val v = (rnd() * 3).toInt().coerceIn(0, 2)
+                        val dir = "fx_zapv$v"
+                        val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
+                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val px = e.x - e.vx + e.vx * rnd(); val py = e.y + e.vy
+                        val sy = (4f * e.vy + 20f * (rnd() * 2f - 1f)) / 100f
+                        val sx = (60 + 60 * rnd()) / 100f
+                        effects += SpriteEffect(dir, fc, 0f, px, py,
+                            rotation = 0f, w = sx*nw, h = abs(sy)*nh, sx = 1f, sy = if (sy>=0) 1f else -1f,
+                            originX = sx*nw/2f, originY = abs(sy)*nh/2f)
                     }
                 }
                 // --- Explosion: 1 fireburst + 4 fireballs ---

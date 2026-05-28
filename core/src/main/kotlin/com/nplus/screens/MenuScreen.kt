@@ -13,6 +13,7 @@ import com.badlogic.gdx.graphics.g2d.GlyphLayout
 import com.badlogic.gdx.graphics.g2d.SpriteBatch
 import com.badlogic.gdx.graphics.g2d.TextureAtlas
 import com.badlogic.gdx.graphics.g2d.TextureRegion
+import com.nplus.levels.DirTypes
 import com.nplus.levels.EntityTypes
 import com.nplus.levels.RawEntity
 import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator
@@ -34,9 +35,9 @@ import com.badlogic.gdx.utils.viewport.ExtendViewport
  * Secret episodes 100–119 appear and become playable only after all 100 normal episodes beaten.
  *
  * ## Fonts (uni 05_53 pixel font from original game)
- * fontSm (12 px) — hint lines, minimap labels
- * fontMd (16 px) — level names, episode cell labels
- * fontLg (20 px) — menu items, section headers
+ * fontSm (8 px)  — hint lines, "select episode", small labels
+ * fontMd (16 px) — "play game" header, episode cell labels
+ * fontLg (20 px) — main menu items
  * fontXl (32 px) — title "N+"
  */
 class MenuScreen(private val appState: AppStateManager,
@@ -53,7 +54,7 @@ class MenuScreen(private val appState: AppStateManager,
     private val layout = GlyphLayout()
 
     // Fonts loaded in show() once GL context is guaranteed
-    private lateinit var fontSm: BitmapFont   // 12 px
+    private lateinit var fontSm: BitmapFont   // 8 px  (uni05_8 — same font used throughout HUD)
     private lateinit var fontMd: BitmapFont   // 16 px
     private lateinit var fontLg: BitmapFont   // 20 px
     private lateinit var fontXl: BitmapFont   // 32 px
@@ -86,7 +87,7 @@ class MenuScreen(private val appState: AppStateManager,
     private val CELL_H    = 42f
     private val COL_PITCH = 52f
     private val ROW_PITCH = 46f
-    private val GRID_LEFT = 8f
+    private val GRID_LEFT = 20f
     private val GRID_TOP  = 530f   // top of row 0 (y-up); space above reserved for title header
 
     // --- Thumbnail panel ---
@@ -120,7 +121,7 @@ class MenuScreen(private val appState: AppStateManager,
     override fun show() {
         camera.setToOrtho(false, 792f, 600f)
         camera.update()
-        fontSm = makeFont("fonts/uni05_12.ttf", 12)
+        fontSm = makeFont("fonts/uni05_8.ttf", 8)
         fontMd = makeFont("fonts/uni05_16.ttf", 16)
         fontLg = makeFont("fonts/uni05_20.ttf", 20)
         fontXl = makeFont("fonts/uni05_32.ttf", 32)
@@ -383,7 +384,11 @@ class MenuScreen(private val appState: AppStateManager,
         drawTextCentred(fontSm, "This will erase all progress.", centreX, 348f)
         batch.end()
 
-        val rowW = 160f
+        layout.setText(fontLg, "Yes, start over")
+        val w0 = layout.width
+        layout.setText(fontLg, "No, go back")
+        val w1 = layout.width
+        val rowW = maxOf(w0, w1) + 40f   // 20px padding each side
         val btnY = 280f
         shape.begin(ShapeRenderer.ShapeType.Filled)
         shape.color = if (confirmCursor == 0) COL_CELL_SEL else COL_CELL
@@ -437,26 +442,26 @@ class MenuScreen(private val appState: AppStateManager,
 
         // Title header
         batch.begin()
-        fontLg.color = COL_TEXT_DARK
-        drawText(fontLg, "play game", GRID_LEFT + 4f, 590f)
+        fontMd.color = COL_TEXT_DARK
+        drawText(fontMd, "play game", GRID_LEFT + 4f, 590f)
         fontSm.color = COL_TEXT_DIM
         drawText(fontSm, "select episode", GRID_LEFT + 4f, 566f)
 
         // Episode labels
         for (ep in 0 until visible) {
             val (cx, cy) = cellPos(ep)
-            fontMd.color = when {
+            fontSm.color = when {
                 ep == episodeCursor     -> COL_TEXT_DARK
                 progress.isBeaten(ep)  -> COL_TEXT_BEAT
                 progress.isUnlocked(ep)-> COL_TEXT_DARK
                 else                   -> COL_TEXT_LOCK
             }
-            drawTextCentred(fontMd, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + 8f)
+            drawTextCentred(fontSm, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + 4f)
         }
 
         // Hint bar
         fontSm.color = COL_TEXT_DIM
-        drawText(fontSm, "↑↓ col   ←→ switch   Enter/A play   Esc/B back", GRID_LEFT, 20f)
+        drawText(fontSm, "Enter/A play   Esc/B back", GRID_LEFT, 20f)
         batch.end()
 
         // Right panel thumbnails
@@ -530,7 +535,7 @@ class MenuScreen(private val appState: AppStateManager,
             for (col in 1 until MINI_COLS - 1) {
                 val type = tileIds[(col - 1) + (row - 1) * interiorCols]
                 if (type == 0 || type == 1) continue  // 0=empty, 1=solid drawn by ShapeRenderer
-                val region = tileRegions.getOrNull(type - 1) ?: continue
+                val region = tileRegions.getOrNull(type) ?: continue
                 batch.draw(region,
                     x + col * tileW,
                     y + (MINI_ROWS - 1 - row) * tileH,
@@ -553,8 +558,18 @@ class MenuScreen(private val appState: AppStateManager,
             val dispH = region.regionHeight * scale
             val drawX = x + e.worldX * scale - dispW / 2f
             val drawY = y + (600f - e.worldY) * scale - dispH / 2f
-            batch.draw(region, drawX, drawY, dispW, dispH)
+            val rotDeg = if (e.type == EntityTypes.THWOMP) thwompRotDeg(e.dir) else 0f
+            batch.draw(region, drawX, drawY, dispW / 2f, dispH / 2f, dispW, dispH, 1f, 1f, rotDeg)
         }
+    }
+
+    private fun thwompRotDeg(dir: Int): Float {
+        val dv  = DirTypes.toVec(dir)
+        val isH = dv[1] == 0f
+        val fd  = if (isH) dv[0].toInt() else dv[1].toInt()
+        val flashAngle = if (isH) { if (fd < 0) 180f else 0f }
+                         else     { if (fd < 0) 270f else 90f }
+        return -flashAngle
     }
 
     // -----------------------------------------------------------------------
