@@ -8,7 +8,7 @@ fun main() {
     val config = Lwjgl3ApplicationConfiguration().apply {
         setTitle("N+")
         setWindowedMode(2560, 1440)
-        setForegroundFPS(60)
+        setForegroundFPS(144)
         useVsync(true)
         setResizable(false)
     }

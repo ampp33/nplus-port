@@ -21,11 +21,7 @@ import com.nplus.physics.Ninja
 import com.nplus.physics.Simulator
 import com.nplus.physics.entities.*
 import com.nplus.physics.tiles.TileTypes
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.floor
-import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.math.*
 
 class GameRenderer : Disposable {
 
@@ -38,8 +34,10 @@ class GameRenderer : Disposable {
         // Interior level background (inside the 792×600 canvas): original stage bg #CACAD0
         private val COL_LEVEL_BG = Color(202/255f, 202/255f, 208/255f, 1f)
 
-        // Dead ninja ragdoll colour (ShapeRenderer sticks)
-        private val COL_NINJA_DEAD = Color(0.40f, 0.40f, 0.40f, 1f)
+        // Ragdoll sprite names per stick index (body, R-arm, L-arm, R-leg, L-leg)
+        private val RAGDOLL_SPRITE = arrayOf("ragdoll_body", "ragdoll_arm", "ragdoll_arm", "ragdoll_leg", "ragdoll_leg")
+        // flipList[i] = scaleY sign from AS3 (body=-1, arms=+1, legs=-1)
+        private val RAGDOLL_FLIP   = floatArrayOf(-1f, 1f, 1f, -1f, -1f)
 
         // Sprite animation rates (fps)
         private const val FPS_GOLD_COLLECT = 60f  // original Flash FPS; 14 frames ≈ 0.47 s
@@ -59,9 +57,11 @@ class GameRenderer : Disposable {
         // Leaving ~22% of WORLD_W on the right so gold overflow can extend the fill visually.
         private val BAR_NORMAL_W = WORLD_W * 0.78f   // ≈ 617 units; gold extends beyond this
 
-        // Overlay dim
-        private val COL_DIM        = Color(0f, 0f, 0f, 0.60f)
-        private val COL_TEXT       = Color(1f, 1f, 1f, 1f)
+        // Overlay modal
+        private val COL_MODAL_BG     = Color(0.90f, 0.90f, 0.92f, 1f)
+        private val COL_MODAL_BORDER = Color(0.10f, 0.10f, 0.12f, 1f)
+        private val COL_MODAL_TEXT   = Color(0.10f, 0.10f, 0.12f, 1f)
+        private val COL_TIMER_TEXT   = Color(1f, 1f, 1f, 1f)
     }
 
     private val camera   = OrthographicCamera()
@@ -87,6 +87,8 @@ class GameRenderer : Disposable {
     // ---------------------------------------------------------------------------
     private lateinit var atlas: TextureAtlas
     private lateinit var ninjaAtlas: TextureAtlas
+    private lateinit var ragdollAtlas: TextureAtlas
+    private lateinit var fxAtlas: TextureAtlas
 
     // Tile sub-regions: each 72×72 atlas region has 24px transparent padding;
     // extract the centre 24×24 once at load time. Index = tile type (0 = EMPTY).
@@ -99,6 +101,26 @@ class GameRenderer : Disposable {
     // Tracks last observed state per ninja to detect STANDING entry for the settle animation
     private val ninjaLastState      = mutableMapOf<Ninja, Ninja.State>()
     private val ninjaStandEntryTime = mutableMapOf<Ninja, Float>()
+
+    // ---------------------------------------------------------------------------
+    // Sprite-effect system — one-shot Flash MC animations, ticked in render time
+    // ---------------------------------------------------------------------------
+
+    private data class SpriteEffect(
+        val dir: String,        // fx atlas region prefix, e.g. "fx_dust0"
+        val frameCount: Int,
+        var elapsed: Float,     // seconds since spawn
+        val x: Float,           // world x
+        val y: Float,           // world y (game y-down)
+        val rotation: Float,    // libGDX CCW degrees (already negated from Flash CW)
+        val w: Float,           // display width  (|flashScaleX| * naturalWidth)
+        val h: Float,           // display height (|flashScaleY| * naturalHeight)
+        val sx: Float,          // ±1 horizontal flip
+        val sy: Float,          // ±1 vertical flip
+        val originX: Float,     // registration x from sprite bottom-left (world units)
+        val originY: Float      // registration y from sprite bottom-left (world units)
+    )
+    private val effects = mutableListOf<SpriteEffect>()
 
     // Timer bar font (uni05, 16 px) — shows the formatted time value inside the bar
     private lateinit var timerFont: BitmapFont
@@ -118,8 +140,10 @@ class GameRenderer : Disposable {
     // ---------------------------------------------------------------------------
 
     private fun loadSprites() {
-        atlas      = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
-        ninjaAtlas = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
+        atlas        = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
+        ninjaAtlas   = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
+        ragdollAtlas = TextureAtlas(Gdx.files.internal("atlas/ragdoll.atlas"))
+        fxAtlas      = TextureAtlas(Gdx.files.internal("atlas/fx.atlas"))
         sprTileRegions = Array(42) { t ->
             val r = atlas.findRegion("tiles/${t + 1}")
                 ?: error("Atlas missing region: tiles/${t + 1}")
@@ -180,7 +204,11 @@ class GameRenderer : Disposable {
         currentTicks: Int          = SimGlobals.DEFAULT_TIMER_TICKS,
         startingTicks: Int         = SimGlobals.DEFAULT_TIMER_TICKS
     ) {
-        stateTime += Gdx.graphics.deltaTime
+        val dt = Gdx.graphics.deltaTime
+        if (playState != PlayState.PRE_GAME) stateTime += dt
+
+        // Drain spawn queue built up during this frame's physics ticks
+        processSpawnEvents(sim)
 
         Gdx.gl.glClearColor(COL_BG.r, COL_BG.g, COL_BG.b, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
@@ -224,11 +252,12 @@ class GameRenderer : Disposable {
         drawNinjaSprites(sim.players)
         batch.end()
 
-        // Pass 4: dead ninja ragdoll.
-        shape.projectionMatrix = camera.combined
-        shape.begin(ShapeType.Filled)
+        // Pass 4: dead ninja ragdoll + sprite effects — SpriteBatch pass.
+        batch.projectionMatrix = camera.combined
+        batch.begin()
         for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja)
-        shape.end()
+        tickAndDrawEffects(dt)
+        batch.end()
 
         // Pass 5: timer bar (always visible, drawn above the level interior).
         drawTimerBar(currentTicks, startingTicks)
@@ -254,14 +283,14 @@ class GameRenderer : Disposable {
         if (fillW > 0f) shape.rect(0f, WORLD_H, fillW, BAR_H)
         shape.end()
 
-        // Timer number: "90.000" style, centered over the normal track
+        // Timer number: centered in the full bar area
         val text = formatTimer(currentTicks)
         glyphLayout.setText(timerFont, text)
-        val tx = (BAR_NORMAL_W - glyphLayout.width) / 2f
-        val ty = WORLD_H + (BAR_H + timerFont.lineHeight) / 2f
+        val tx = (WORLD_W - glyphLayout.width) / 2f
+        val ty = WORLD_H + BAR_H / 2f + timerFont.capHeight / 2f
         batch.projectionMatrix = camera.combined
         batch.begin()
-        timerFont.color = COL_TEXT
+        timerFont.color = COL_TIMER_TEXT
         timerFont.draw(batch, text, tx, ty)
         batch.end()
     }
@@ -307,14 +336,6 @@ class GameRenderer : Disposable {
     // ---------------------------------------------------------------------------
 
     private fun drawOverlay(playState: PlayState) {
-        // Dim the level
-        shape.projectionMatrix = camera.combined
-        shape.begin(ShapeType.Filled)
-        shape.color = COL_DIM
-        shape.rect(0f, 0f, WORLD_W, WORLD_H)
-        shape.end()
-
-        // Choose prompt lines
         val line1 = when (playState) {
             PlayState.PRE_GAME  -> "PRESS JUMP TO BEGIN"
             PlayState.PAUSED    -> "PAUSED"
@@ -322,25 +343,55 @@ class GameRenderer : Disposable {
             else                -> return
         }
         val line2 = when (playState) {
-            PlayState.PAUSED    -> "PRESS Q TO QUIT"
-            else                -> null
+            PlayState.PAUSED -> "PRESS Q TO QUIT"
+            else             -> null
         }
 
+        // Measure text to size the modal box (capHeight for true visual centering)
+        val capH     = overlayFont.capHeight
+        val lineGap  = capH * 0.8f
+        val lineStep = capH + lineGap
+        glyphLayout.setText(overlayFont, line1)
+        var maxTextW = glyphLayout.width
+        if (line2 != null) {
+            glyphLayout.setText(overlayFont, line2)
+            if (glyphLayout.width > maxTextW) maxTextW = glyphLayout.width
+        }
+        val lineCount = if (line2 != null) 2 else 1
+        val textH = capH * lineCount + lineGap * (lineCount - 1)
+        val padX  = 28f
+        val padY  = 20f
+        val boxW  = maxTextW + padX * 2f
+        val boxH  = textH + padY * 2f
+        val boxX  = (WORLD_W - boxW) / 2f
+        val boxY  = (WORLD_H - boxH) / 2f
+
+        // Draw the modal background and border over the unobscured play area
+        shape.projectionMatrix = camera.combined
+        shape.begin(ShapeType.Filled)
+        shape.color = COL_MODAL_BG
+        shape.rect(boxX, boxY, boxW, boxH)
+        shape.end()
+
+        shape.begin(ShapeType.Line)
+        shape.color = COL_MODAL_BORDER
+        shape.rect(boxX, boxY, boxW, boxH)
+        shape.end()
+
+        // Text centered inside the modal box
         batch.projectionMatrix = camera.combined
         batch.begin()
-        overlayFont.color = COL_TEXT
+        overlayFont.color = COL_MODAL_TEXT
 
-        val lineH = overlayFont.lineHeight
-        val totalH = lineH * (if (line2 != null) 2 else 1)
-        var y = WORLD_H / 2f + totalH / 2f
-
+        // y = box center + half of visible text block height (capHeight-based vertical centering)
+        var y = boxY + boxH / 2f + textH / 2f
         glyphLayout.setText(overlayFont, line1)
-        overlayFont.draw(batch, line1, (WORLD_W - glyphLayout.width) / 2f, y)
+        overlayFont.draw(batch, line1, boxX + (boxW - glyphLayout.width) / 2f, y)
 
         if (line2 != null) {
-            y -= lineH * 1.6f
+            y -= lineStep
             glyphLayout.setText(overlayFont, line2)
-            overlayFont.draw(batch, line2, (WORLD_W - glyphLayout.width) / 2f, y)
+            overlayFont.draw(batch, line2, boxX + (boxW - glyphLayout.width) / 2f, y)
         }
 
         batch.end()
@@ -351,8 +402,10 @@ class GameRenderer : Disposable {
         batch.dispose()
         atlas.dispose()
         ninjaAtlas.dispose()
-        if (::timerFont.isInitialized)  timerFont.dispose()
-        if (::overlayFont.isInitialized) overlayFont.dispose()
+        if (::ragdollAtlas.isInitialized) ragdollAtlas.dispose()
+        if (::fxAtlas.isInitialized)      fxAtlas.dispose()
+        if (::timerFont.isInitialized)    timerFont.dispose()
+        if (::overlayFont.isInitialized)  overlayFont.dispose()
     }
 
     // ---------------------------------------------------------------------------
@@ -644,13 +697,181 @@ class GameRenderer : Disposable {
     }
 
     private fun drawRagdoll(ninja: Ninja) {
-        val rag = ninja.ragdoll
+        val rag    = ninja.ragdoll
+        val facing = ninja.getFacing()
         for (i in 0 until rag.getStickCount()) {
-            val (p0, orn, _) = rag.getStickRenderData(i)
-            shape.color = COL_NINJA_DEAD
-            val ex = cos(orn) * 8f; val ey = sin(orn) * 8f
-            shape.line(p0.x - ex, fy(p0.y) - ey, p0.x + ex, fy(p0.y) + ey)
+            val s      = rag.getStickRenderData(i)
+            val spName = RAGDOLL_SPRITE[i]
+            val reg    = ragdollAtlas.findRegion("$spName/${s.frame}") ?: continue
+            val w      = reg.regionWidth  * 0.2f
+            val h      = reg.regionHeight * 0.2f
+            // Registration at left-center (p0 = stick origin) in sprite local space.
+            // In the atlas the sprite canvas has p0 at the left edge, center height.
+            val ox = 0f; val oy = h / 2f
+            // libGDX: negate Flash rotation for y-up, flip sign for scaleY due to y-axis inversion
+            val rot   = -(s.ornRad * (180f / PI.toFloat()))
+            val scaleY = RAGDOLL_FLIP[i] * facing
+            batch.draw(reg, s.x0 - ox, fy(s.y0) - oy, ox, oy, w, h, 1f, scaleY, rot)
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sprite-effect helpers
+    // ---------------------------------------------------------------------------
+
+    /** Draw all active effects and remove finished ones. */
+    private fun tickAndDrawEffects(dt: Float) {
+        val iter = effects.iterator()
+        while (iter.hasNext()) {
+            val e = iter.next()
+            e.elapsed += dt
+            val totalDuration = e.frameCount / 30f
+            if (e.elapsed >= totalDuration) { iter.remove(); continue }
+            val frame = ((e.elapsed * 30f).toInt() + 1).coerceIn(1, e.frameCount)
+            val reg = fxAtlas.findRegion("${e.dir}/$frame") ?: continue
+            batch.draw(reg,
+                e.x - e.originX, fy(e.y) - e.originY,
+                e.originX, e.originY,
+                e.w, e.h,
+                e.sx, e.sy,
+                e.rotation)
+        }
+    }
+
+    /** Spawn one dust-family particle (FXTYPE_JUMPDUST / FXTYPE_SKIDDUST). */
+    private fun spawnDust(x: Float, y: Float, flashRot: Float, flashScaleX: Float, flashScaleY: Float) {
+        val dir = if (Math.random() < 0.5) "fx_dust0" else "fx_dust1"
+        val frameCount = if (dir == "fx_dust0") 33 else 31
+        val reg = fxAtlas.findRegion("$dir/1") ?: return
+        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+        val absW = abs(flashScaleX) * natW; val absH = abs(flashScaleY) * natH
+        // Registration at left-center: dust origin at (p.x, p.y), spray extends right/away.
+        effects += SpriteEffect(dir, frameCount, 0f, x, y,
+            rotation = -flashRot,
+            w = absW, h = absH,
+            sx = if (flashScaleX >= 0) 1f else -1f,
+            sy = if (flashScaleY >= 0) 1f else -1f,
+            originX = 0f, originY = absH / 2f)
+    }
+
+    private fun rnd() = Math.random().toFloat()
+
+    private fun processSpawnEvents(sim: Simulator) {
+        for (e in sim.pendingSpawns) {
+            when (e) {
+                // --- JumpDust: 5 dust sprites fanning out from the foot ---
+                is Simulator.SpawnEvent.JumpDust -> {
+                    var side = 1
+                    repeat(5) {
+                        val rot = e.angleDeg - side * 20 + (rnd() * 20 - 10)
+                        val sx  = side * (10 + rnd() * 8) / 100f
+                        val sy  = (10 + rnd() * 5) / 100f
+                        spawnDust(e.x, e.y, rot, sx, sy)
+                        side *= -1
+                    }
+                }
+                // --- LandDust: 5 dust sprites with wider fan ---
+                is Simulator.SpawnEvent.LandDust -> {
+                    var side = 1
+                    repeat(5) {
+                        val rot = e.angleDeg - side * 40 + (rnd() * 20 - 10)
+                        val sx  = side * (5 + rnd() * 5 + e.speed) / 100f
+                        val sy  = (15 + e.speed * 2) / 100f
+                        spawnDust(e.x, e.y, rot, sx, sy)
+                        side *= -1
+                    }
+                }
+                // --- WallDust: 30% chance, 1 skid-dust sprite ---
+                is Simulator.SpawnEvent.WallDust -> {
+                    if (rnd() < 0.3f) {
+                        val rot = 90f - e.nx * 8 + (rnd() * 10 - 5)
+                        val sx  = (10 + e.speed * 20).coerceAtMost(64f) / 100f
+                        val sy  = 10f / 100f
+                        spawnDust(e.x, e.y, rot, sx, sy)
+                    }
+                }
+                // --- BloodSpurt: count+1 blood sprites ---
+                is Simulator.SpawnEvent.Blood -> {
+                    val MAX = 64f
+                    repeat(e.count + 1) {
+                        val dir = if (rnd() < 0.5f) "fx_blood0" else "fx_blood1"
+                        val fc  = if (dir == "fx_blood0") 19 else 32
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
+                        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+                        val bx = e.x - (rnd() * 8 - 4)
+                        val by = e.y - (rnd() * 8 - 4)
+                        val fsx = (e.vx * (6 + rnd() * 3) - (rnd() * 60 - 30))
+                            .coerceIn(-MAX, MAX) / 100f
+                        val fsy = (e.vy * (6 + rnd() * 3) - (rnd() * 60 - 30))
+                            .coerceIn(-MAX, MAX) / 100f
+                        val absW = abs(fsx) * natW; val absH = abs(fsy) * natH
+                        if (absW < 0.1f || absH < 0.1f) return@repeat
+                        effects += SpriteEffect(dir, fc, 0f, bx, by,
+                            rotation = 0f,
+                            w = absW, h = absH,
+                            sx = if (fsx >= 0) 1f else -1f,
+                            sy = if (fsy >= 0) 1f else -1f,
+                            originX = absW / 2f, originY = absH / 2f)
+                    }
+                }
+                // --- RocketSmoke: 20% chance, 1 smoke sprite ---
+                is Simulator.SpawnEvent.RocketSmoke -> {
+                    if (rnd() < 0.2f) {
+                        val variant = (rnd() * 3).toInt().coerceIn(0, 2)
+                        val dir = "fx_rocket_smoke$variant"
+                        val fc  = when (variant) { 0 -> 28; 1 -> 23; else -> 27 }
+                        val reg = fxAtlas.findRegion("$dir/1") ?: continue
+                        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+                        val fsx = (20 + rnd() * 20) / 100f
+                        val fsy = (20 + rnd() * 20) / 100f
+                        val rot = e.angleDeg + (10 * (rnd() * 2 - 1))
+                        val absW = fsx * natW; val absH = fsy * natH
+                        // Registration at right-center: nozzle at (e.x,e.y), smoke extends left/back
+                        effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
+                            rotation = -rot,
+                            w = absW, h = absH,
+                            sx = 1f, sy = 1f,
+                            originX = absW, originY = absH / 2f)
+                    }
+                }
+                // --- Explosion: 1 fireburst + 4 fireballs ---
+                is Simulator.SpawnEvent.Explosion -> {
+                    val r1 = rnd(); val r2 = rnd(); val r3 = rnd()
+                    val r4 = rnd(); val r5 = rnd()
+                    // Fireburst
+                    run {
+                        val v = (rnd() * 2).toInt().coerceIn(0, 1)
+                        val dir = "fx_fireburst$v"; val fc = if (v == 0) 19 else 17
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@run
+                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val sw = (15 + r1 * 15) / 100f; val sh = (15 + r2 * 15) / 100f
+                        effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
+                            rotation = 0f, w = sw*nw, h = sh*nh, sx = 1f, sy = 1f,
+                            originX = sw*nw/2f, originY = sh*nh/2f)
+                    }
+                    // 4 fireballs
+                    val fbRots = floatArrayOf(360f*r1, 360f*r2, 360f*r5, 360f*r3)
+                    val fbSxArr = floatArrayOf(
+                        (20 + r3 * 20) / 100f, (20 + r3 * 20) / 100f,
+                        (20 + r4 * 30) / 100f, (20 + r4 * 30) / 100f)
+                    val fbSyArr = floatArrayOf(
+                        (20 + r5 * 20) / 100f, (20 + r1 * 10) / 100f,
+                        (20 + r1 * 10) / 100f, (20 + r5 * 20) / 100f)
+                    repeat(4) { j ->
+                        val v = (rnd() * 3).toInt().coerceIn(0, 2)
+                        val dir = "fx_fireball$v"
+                        val fc  = when (v) { 0 -> 15; 1 -> 14; else -> 11 }
+                        val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
+                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val sw = fbSxArr[j]; val sh = fbSyArr[j]
+                        effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
+                            rotation = -fbRots[j], w = sw*nw, h = sh*nh, sx = 1f, sy = 1f,
+                            originX = 0f, originY = sh*nh/2f)
+                    }
+                }
+            }
+        }
+        sim.pendingSpawns.clear()
     }
 
 }

@@ -184,17 +184,28 @@ class Ragdoll {
         }
     }
 
-    /** Returns the 5 stick (p0.pos, orientation, normalised length) for the renderer. */
-    fun getStickRenderData(index: Int): Triple<Vec2, Float, Float> {
-        val stick = sticks[state][index]
-        val dx = stick.p1.pos.x - stick.p0.pos.x
-        val dy = stick.p1.pos.y - stick.p0.pos.y
-        val len = sqrt(dx * dx + dy * dy)
-        val normLen = len / stick.maxLen
-        return Triple(Vec2(stick.p0.pos.x, stick.p0.pos.y),
-                      atan2(dy, dx),
-                      normLen.coerceIn(0f, 1f))
+    data class StickRenderData(
+        val x0: Float, val y0: Float, val x1: Float, val y1: Float,
+        /** atan2(y1-y0, x1-x0) in radians */
+        val ornRad: Float,
+        /** clamp(dist/maxLen, 0, 1) */
+        val normLen: Float,
+        /** 1-based frame index: 1 + floor(100 * normLen), clamped to 1..101 */
+        val frame: Int
+    )
+
+    fun getStickRenderData(index: Int): StickRenderData {
+        val s = sticks[state][index]
+        val dx = s.p1.pos.x - s.p0.pos.x
+        val dy = s.p1.pos.y - s.p0.pos.y
+        val dist = sqrt(dx * dx + dy * dy)
+        val norm = (dist / s.maxLen).coerceIn(0f, 1f)
+        val frame = (1 + floor(100f * norm).toInt()).coerceIn(1, 101)
+        return StickRenderData(s.p0.pos.x, s.p0.pos.y, s.p1.pos.x, s.p1.pos.y,
+            atan2(dy, dx), norm, frame)
     }
+
+    fun getParticlePos(index: Int): Vec2 = particles[state][index].pos
 
     fun getStickCount(): Int = sticks[state].size
 

@@ -123,6 +123,7 @@ class Ninja(
     fun getVel(): Vec2 = vel.copy()
     fun getRadius() = r
     fun isDead()    = state == State.DEAD || state == State.DISABLED
+    fun getFacing() = lastFacing
 
     // --- GFX state snapshot for renderer (no rendering imports here) ---
 

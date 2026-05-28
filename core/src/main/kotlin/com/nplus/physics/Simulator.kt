@@ -184,28 +184,41 @@ open class Simulator(
     fun entityList(): List<EntityBase> = entities
 
     // -----------------------------------------------------------------------
-    // Particle + sound hooks (open — GameScreen overrides with real impls)
+    // Particle spawn queue — filled by physics, drained by the renderer each frame
     // -----------------------------------------------------------------------
 
-    // --- Entity-specific particle and sound hooks ---
+    sealed class SpawnEvent {
+        data class JumpDust(val x: Float, val y: Float, val angleDeg: Float) : SpawnEvent()
+        data class LandDust(val x: Float, val y: Float, val angleDeg: Float, val speed: Float) : SpawnEvent()
+        data class WallDust(val x: Float, val y: Float, val nx: Float, val ny: Float, val speed: Float) : SpawnEvent()
+        data class Blood(val x: Float, val y: Float, val vx: Float, val vy: Float, val count: Int) : SpawnEvent()
+        data class RocketSmoke(val x: Float, val y: Float, val angleDeg: Float) : SpawnEvent()
+        data class Explosion(val x: Float, val y: Float) : SpawnEvent()
+    }
 
-    open fun spawnExplosion(x: Float, y: Float) {}
+    val pendingSpawns = mutableListOf<SpawnEvent>()
+
+    // -----------------------------------------------------------------------
+    // Particle + sound hooks (open — override for audio; default impls record effects)
+    // -----------------------------------------------------------------------
+
+    open fun spawnExplosion(x: Float, y: Float) { pendingSpawns += SpawnEvent.Explosion(x, y) }
     open fun spawnZap(x: Float, y: Float, angleDeg: Float) {}
     open fun spawnZapThwompH(x: Float, y: Float, vx: Float, vy: Float) {}
     open fun spawnZapThwompV(x: Float, y: Float, vx: Float, vy: Float) {}
-    open fun spawnRocketSmoke(x: Float, y: Float, angleDeg: Float) {}
+    open fun spawnRocketSmoke(x: Float, y: Float, angleDeg: Float) { pendingSpawns += SpawnEvent.RocketSmoke(x, y, angleDeg) }
     open fun spawnTurretBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}
     open fun spawnChainBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}
     open fun spawnLaserCharge(x: Float, y: Float) {}
     open fun playSoundGold() {}
     open fun playSoundEntity(name: String) {}
 
-    open fun spawnJumpDust(x: Float, y: Float, angle: Float) {}
-    open fun spawnLandDust(x: Float, y: Float, angle: Float, speed: Float) {}
-    open fun spawnWallDust(pos: Vec2, r: Float, wallNormal: Vec2, speed: Float) {}
+    open fun spawnJumpDust(x: Float, y: Float, angle: Float) { pendingSpawns += SpawnEvent.JumpDust(x, y, angle) }
+    open fun spawnLandDust(x: Float, y: Float, angle: Float, speed: Float) { pendingSpawns += SpawnEvent.LandDust(x, y, angle, speed) }
+    open fun spawnWallDust(pos: Vec2, r: Float, wallNormal: Vec2, speed: Float) { pendingSpawns += SpawnEvent.WallDust(pos.x, pos.y, wallNormal.x, wallNormal.y, speed) }
     open fun spawnFloorDust(pos: Vec2, r: Float, floorNormal: Vec2, angle: Float, dir: Float, speed: Float) {}
-    open fun spawnBloodSpurt(x: Float, y: Float, vx: Float, vy: Float, count: Int) {}
-    open fun spawnRagBloodSpurt(x: Float, y: Float, vx: Float, vy: Float) {}
+    open fun spawnBloodSpurt(x: Float, y: Float, vx: Float, vy: Float, count: Int) { pendingSpawns += SpawnEvent.Blood(x, y, vx, vy, count) }
+    open fun spawnRagBloodSpurt(x: Float, y: Float, vx: Float, vy: Float) { pendingSpawns += SpawnEvent.Blood(x, y, vx, vy, 2) }
     open fun spawnRagDust(pos: Vec2, r: Float, vx: Float, vy: Float, scale: Float) {}
     open fun playSoundRagdoll(name: String) {}
 
