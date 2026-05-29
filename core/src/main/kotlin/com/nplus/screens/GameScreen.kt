@@ -45,7 +45,12 @@ class GameScreen(
         private const val TICK_DT             = 1f / SimGlobals.SIM_RATE
         private const val MAX_DELTA           = 0.1f
         // Frames before jump input is accepted in POST_GAME (prevents instant retry on death)
-        private const val POST_GAME_COOLDOWN  = (SimGlobals.SIM_RATE * 0.5f).toInt()  // 30
+        private const val POST_GAME_COOLDOWN = (SimGlobals.SIM_RATE * 0.5f).toInt()  // 30
+        // Celebration animation frame ranges (start..end inclusive) from ninja.atlas
+        private val CELEBRATION_RANGES = listOf(
+            106 to 166, 167 to 234, 235 to 354, 355 to 448,
+            449 to 506, 507 to 658, 659 to 743, 744 to 797
+        )
     }
 
     // --- Subsystems ---
@@ -59,6 +64,9 @@ class GameScreen(
     // --- Play state ---
     private var playState          = PlayState.PRE_GAME
     private var postGameCooldown   = 0
+    private var celebStartFrame    = CELEBRATION_RANGES[0].first
+    private var celebEndFrame      = CELEBRATION_RANGES[0].second
+    private var celebElapsed       = 0f
 
     // --- Timer ---
     private var currentTicks       = startingTicks
@@ -73,6 +81,7 @@ class GameScreen(
     // --- Edge-detect for all keys ---
     private var prevJump   = false
     private var prevPause  = false
+    private var prevP      = false
     private var prevK      = false
     private var prevQ      = false
     private var prevR      = false
@@ -98,6 +107,7 @@ class GameScreen(
         val nowK     = Gdx.input.isKeyPressed(Input.Keys.K)
         val nowQ     = Gdx.input.isKeyPressed(Input.Keys.Q)
         val nowR     = Gdx.input.isKeyPressed(Input.Keys.R)
+        val nowP     = Gdx.input.isKeyPressed(Input.Keys.P)
 
         when (playState) {
 
@@ -119,8 +129,8 @@ class GameScreen(
             PlayState.GAME -> {
                 audio.tick()
 
-                // ESC → pause
-                if (nowPause && !prevPause) {
+                // ESC or P → pause
+                if ((nowPause && !prevPause) || (nowP && !prevP)) {
                     playState = PlayState.PAUSED
                     audio.pause()
                 }
@@ -156,8 +166,13 @@ class GameScreen(
                 // Check for end-of-level (win or death)
                 if (currentSim.appIsGameDone()) {
                     if (currentSim.appDidPlayerWin()) {
-                        appState.levelComplete(episode, level, currentTicks)
-                        return
+                        val range = CELEBRATION_RANGES.random()
+                        celebStartFrame = range.first
+                        celebEndFrame   = range.second
+                        celebElapsed    = 0f
+                        renderer.celebStartFrame = celebStartFrame
+                        renderer.celebEndFrame   = celebEndFrame
+                        playState = PlayState.POST_WIN
                     } else {
                         playState        = PlayState.POST_GAME
                         postGameCooldown = POST_GAME_COOLDOWN
@@ -168,10 +183,26 @@ class GameScreen(
             PlayState.PAUSED -> {
                 // Q → quit to menu
                 if (nowQ && !prevQ) { appState.goToMenu(); return }
-                // Jump or ESC → resume
-                if ((nowJump && !prevJump) || (nowPause && !prevPause)) {
+                // Jump, ESC, or P → resume
+                if ((nowJump && !prevJump) || (nowPause && !prevPause) || (nowP && !prevP)) {
                     playState = PlayState.GAME
                     audio.resume()
+                }
+            }
+
+            PlayState.POST_WIN -> {
+                audio.tick()
+
+                accumulator  += safeDelta
+                celebElapsed += safeDelta
+                while (accumulator >= TICK_DT) {
+                    currentSim.tick()
+                    accumulator -= TICK_DT
+                }
+
+                // Jump at any point (mid-animation or after freeze) advances to next level
+                if (nowJump && !prevJump) {
+                    appState.levelComplete(episode, level, currentTicks); return
                 }
             }
 
@@ -201,11 +232,13 @@ class GameScreen(
 
         prevJump  = nowJump
         prevPause = nowPause
+        prevP     = nowP
         prevK     = nowK
         prevQ     = nowQ
         prevR     = nowR
 
-        renderer.render(currentSim, playState, currentTicks, startingTicks, levelLabel)
+        renderer.render(currentSim, playState, currentTicks, startingTicks, levelLabel,
+                        appState.progress.getNinjaColor())
     }
 
     override fun resize(width: Int, height: Int) {
@@ -254,6 +287,8 @@ class GameScreen(
         timerCalledTimeUp = false
         accumulator       = 0f
         playState         = PlayState.PRE_GAME
-        prevJump = false; prevPause = false; prevK = false; prevQ = false; prevR = false
+        postGameCooldown  = 0
+        celebElapsed      = 0f
+        prevJump = false; prevPause = false; prevP = false; prevK = false; prevQ = false; prevR = false
     }
 }

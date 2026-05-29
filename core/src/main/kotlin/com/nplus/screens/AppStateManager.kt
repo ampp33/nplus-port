@@ -51,6 +51,8 @@ class AppStateManager(private val game: NPlusGame) {
 
     fun goToMenu() = transition(AppState.MainMenu)
 
+    fun goToSettings() = transition(AppState.Settings)
+
     /** Go straight to the episode grid with the cursor on [episode]. */
     fun goToEpisodeGrid(episode: Int) {
         state = AppState.MainMenu
@@ -97,6 +99,7 @@ class AppStateManager(private val game: NPlusGame) {
         } else {
             // Last level of this episode finished; timer resets for the next episode
             progress.beatEpisode(episode)
+            progress.setEpisodeRecord(episode, timerTicks)
             val nextEp = episode + 1
             if (levelMap.containsKey(nextEp to 0)) {
                 progress.setLastPlayed(nextEp, 0)
@@ -127,6 +130,7 @@ class AppStateManager(private val game: NPlusGame) {
             when (newState) {
                 is AppState.MainMenu -> MenuScreen(this)
                 is AppState.Playing  -> GameScreen(this, newState.episode, newState.level, newState.startingTicks)
+                is AppState.Settings -> SettingsScreen(this)
             }
         )
     }

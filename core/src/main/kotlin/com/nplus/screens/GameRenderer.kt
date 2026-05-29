@@ -12,6 +12,7 @@ import com.badlogic.gdx.graphics.g2d.TextureAtlas
 import com.badlogic.gdx.graphics.g2d.TextureRegion
 import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator
 import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator.FreeTypeFontParameter
+import com.badlogic.gdx.graphics.glutils.ShaderProgram
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType
 import com.badlogic.gdx.utils.Disposable
@@ -41,10 +42,13 @@ class GameRenderer : Disposable {
 
         // Sprite animation rates (fps)
         private const val FPS_GOLD_COLLECT = 60f  // original Flash FPS; 14 frames ≈ 0.47 s
+        private const val FPS_EXITDOOR     = 60f  // Flash timeline rate; 16-frame open anim ≈ 0.53 s
         private const val FPS_LAUNCHPAD    = 8f
         private const val FPS_FLOORGUARD   = 8f
         private const val FPS_DRONE        = 8f
-        private const val FPS_ROCKET       = 30f
+        private const val FPS_ROCKET       = 60f
+        private const val FPS_EFFECTS      = 60f
+        private const val FPS_CELEBRATE    = 60f
 
         // Turret base: 17 animation frames.
         //   Frame 1       = idle (darkest)
@@ -69,6 +73,36 @@ class GameRenderer : Disposable {
         private val COL_MODAL_BORDER = Color(0.10f, 0.10f, 0.12f, 1f)
         private val COL_MODAL_TEXT   = Color(0.10f, 0.10f, 0.12f, 1f)
         private val COL_TIMER_TEXT   = Color(1f, 1f, 1f, 1f)
+
+        // Color-replacement shader: discards sprite RGB, uses vertex color as flat tint,
+        // keeps only the texture alpha. Mimics Flash ColorTransform.color absolute replacement.
+        private val NINJA_VERT = """
+            attribute vec4 a_position;
+            attribute vec4 a_color;
+            attribute vec2 a_texCoord0;
+            uniform mat4 u_projTrans;
+            varying vec4 v_color;
+            varying vec2 v_texCoords;
+            void main() {
+                v_color = a_color;
+                v_color.a = v_color.a * (255.0/254.0);
+                v_texCoords = a_texCoord0;
+                gl_Position = u_projTrans * a_position;
+            }
+        """.trimIndent()
+
+        private val NINJA_FRAG = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec4 v_color;
+            varying vec2 v_texCoords;
+            uniform sampler2D u_texture;
+            void main() {
+                float alpha = texture2D(u_texture, v_texCoords).a;
+                gl_FragColor = vec4(v_color.rgb, alpha * v_color.a);
+            }
+        """.trimIndent()
     }
 
     private val camera   = OrthographicCamera()
@@ -85,6 +119,10 @@ class GameRenderer : Disposable {
     // consumeTrigger() resets the entity flag; we store the moment here to time the one-shot.
     private val launchpadTriggerTimes = mutableMapOf<LaunchpadEntity, Float>()
 
+    // Exit door one-shot opening animation: entity → stateTime when first seen as open.
+    // Plays frames 2–17 once at FPS_EXITDOOR, then holds frame 17.
+    private val exitDoorOpenTimes = mutableMapOf<ExitDoor, Float>()
+
     // ---------------------------------------------------------------------------
     // sprites.atlas — all sprites except ninja (Nearest filtering, 1:1 scale).
     //   Region names: "<folder>/<1-based-frame>" e.g. "tiles/3", "gold/5".
@@ -96,6 +134,11 @@ class GameRenderer : Disposable {
     private lateinit var ninjaAtlas: TextureAtlas
     private lateinit var ragdollAtlas: TextureAtlas
     private lateinit var fxAtlas: TextureAtlas
+    private lateinit var ninjaShader: ShaderProgram
+
+    // Set by GameScreen when entering POST_WIN — selects which celebration clip to play.
+    var celebStartFrame: Int = 106
+    var celebEndFrame:   Int = 166
 
     // Tile sub-regions: each 72×72 atlas region has 24px transparent padding;
     // extract the centre 24×24 once at load time. Index = tile type (0 = EMPTY).
@@ -158,7 +201,7 @@ class GameRenderer : Disposable {
         }
         val gen8 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_8.ttf"))
         val p8 = FreeTypeFontParameter().apply {
-            size      = 8
+            size      = 16
             mono      = true
             minFilter = Texture.TextureFilter.Nearest
             magFilter = Texture.TextureFilter.Nearest
@@ -167,6 +210,11 @@ class GameRenderer : Disposable {
         timerFont   = gen8.generateFont(p8)
         overlayFont = gen8.generateFont(p8)
         gen8.dispose()
+
+        ShaderProgram.pedantic = false
+        ninjaShader = ShaderProgram(NINJA_VERT, NINJA_FRAG)
+        if (!ninjaShader.isCompiled)
+            Gdx.app.error("GameRenderer", "Ninja shader error: ${ninjaShader.log}")
     }
 
     /** Look up a 1-based frame. Ninja frames come from the Linear-filtered ninja atlas. */
@@ -198,11 +246,12 @@ class GameRenderer : Disposable {
     }
 
     fun render(
-        sim:          Simulator,
-        playState:    PlayState    = PlayState.GAME,
-        currentTicks: Int          = SimGlobals.DEFAULT_TIMER_TICKS,
-        startingTicks: Int         = SimGlobals.DEFAULT_TIMER_TICKS,
-        levelLabel:   String       = ""
+        sim:           Simulator,
+        playState:     PlayState = PlayState.GAME,
+        currentTicks:  Int       = SimGlobals.DEFAULT_TIMER_TICKS,
+        startingTicks: Int       = SimGlobals.DEFAULT_TIMER_TICKS,
+        levelLabel:    String    = "",
+        ninjaColor:    Color     = Color.WHITE
     ) {
         val dt = Gdx.graphics.deltaTime
         if (playState != PlayState.PRE_GAME) stateTime += dt
@@ -252,13 +301,21 @@ class GameRenderer : Disposable {
         // Pass 3: non-FULL tile sprites + living ninja — on top of everything.
         batch.begin()
         drawTiles(sim.tileGrid)
+        batch.setShader(ninjaShader)
+        batch.setColor(ninjaColor)
         drawNinjaSprites(sim.players)
+        batch.setShader(null)
+        batch.setColor(Color.WHITE)
         batch.end()
 
-        // Pass 4: dead ninja ragdoll + sprite effects — SpriteBatch pass.
+        // Pass 4: dead ninja ragdoll (color-replacement shader) + sprite effects.
         batch.projectionMatrix = camera.combined
         batch.begin()
+        batch.setShader(ninjaShader)
+        batch.setColor(ninjaColor)
         for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja)
+        batch.setShader(null)
+        batch.setColor(Color.WHITE)
         tickAndDrawEffects(dt)
         batch.end()
 
@@ -361,7 +418,7 @@ class GameRenderer : Disposable {
             else                -> return
         }
         val line2 = when (playState) {
-            PlayState.PAUSED -> "PRESS Q TO QUIT"
+            PlayState.PAUSED -> "PRESS JUMP TO CONTINUE, OR Q TO QUIT"
             else             -> null
         }
 
@@ -424,6 +481,7 @@ class GameRenderer : Disposable {
         if (::fxAtlas.isInitialized)      fxAtlas.dispose()
         if (::timerFont.isInitialized)    timerFont.dispose()
         if (::overlayFont.isInitialized)  overlayFont.dispose()
+        if (::ninjaShader.isInitialized)  ninjaShader.dispose()
     }
 
     // ---------------------------------------------------------------------------
@@ -523,8 +581,17 @@ class GameRenderer : Disposable {
             }
 
             is ExitDoor -> {
-                val reg = if (e.isOpen()) fr("exitdoor", 17) else fr("exitdoor", 1)
-                drawCentered(reg, e.getPos().x, e.getPos().y)
+                val px = e.getPos().x; val py = e.getPos().y
+                if (!e.isOpen()) {
+                    exitDoorOpenTimes.remove(e)
+                    drawCentered(fr("exitdoor", 1), px, py)
+                } else {
+                    val start   = exitDoorOpenTimes.getOrPut(e) { stateTime }
+                    val elapsed = stateTime - start
+                    // Frames 2–17: opening animation (16 frames), then hold frame 17.
+                    val frame   = (2 + (elapsed * FPS_EXITDOOR).toInt()).coerceAtMost(17)
+                    drawCentered(fr("exitdoor", frame), px, py)
+                }
             }
 
             is ExitSwitch -> {
@@ -601,11 +668,14 @@ class GameRenderer : Disposable {
 
             is DroneChaser -> {
                 drawCentered(cycled("drone_chaser", 3, FPS_DRONE), e.pos.x, e.pos.y)
-                drawRotated(fr("drone_eye", 1), e.pos.x, e.pos.y, -Math.toDegrees(e.gfxOrn.toDouble()).toFloat())
+                val ornC = e.gfxOrn.toDouble()
+                drawCentered(fr("drone_eye", 1), e.pos.x + cos(ornC).toFloat() * 4f, e.pos.y + sin(ornC).toFloat() * 4f)
             }
 
             is DroneZap -> {
                 drawCentered(fr("drone_zap", 1), e.pos.x, e.pos.y)
+                val ornZ = e.gfxOrn.toDouble()
+                drawCentered(fr("drone_eye", 1), e.pos.x + cos(ornZ).toFloat() * 4f, e.pos.y + sin(ornZ).toFloat() * 4f)
             }
 
             is DroneLaser -> {
@@ -640,7 +710,7 @@ class GameRenderer : Disposable {
                 drawRotated(fr("oneway", 1),
                     e.getPos().x - n.x * halfThick,
                     e.getPos().y - n.y * halfThick,
-                    -normalAngleDeg(n.x, n.y) + 180f)
+                    normalAngleDeg(n.x, n.y))
             }
 
             is DoorRegular -> if (!e.isOpen()) {
@@ -699,10 +769,8 @@ class GameRenderer : Disposable {
 
     private fun drawNinjaTex(reg: TextureRegion, px: Float, py: Float, facing: Float, ornDeg: Float) {
         val w = reg.regionWidth * 0.2f; val h = reg.regionHeight * 0.2f
-        val ox = w / 2f; val oy = h / 2f
-        // Sprite canvas centre is at physics centre, but the solid foot pixels sit ~1.8 units
-        // below the floor contact (r=10). Shift up by 2 to align feet with floor.
-        batch.draw(reg, px - ox, fy(py) - oy + 2f, ox, oy, w, h, facing, 1f, ornDeg)
+        val ox = w / 2f; val oy = h / 2f - 2f
+        batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, facing, 1f, ornDeg)
     }
 
     private fun selectNinjaFrame(ninja: Ninja, state: Ninja.GfxState): TextureRegion? {
@@ -716,13 +784,19 @@ class GameRenderer : Disposable {
             Ninja.State.SKIDDING ->
                 fr("ninja", 12)    // frame 12: skidding down a slope
 
-            Ninja.State.STANDING, Ninja.State.CELEBRATING -> {
+            Ninja.State.STANDING -> {
                 // On entry: play frames 1-11 once at 24fps (settle-down animation), then hold frame 11.
-                // Original: gotoAndPlay("STAND") plays once, stop() fires at frame 11.
-                // Entry time is set in drawNinjaSprites on every state transition.
-                val elapsed = stateTime - (ninjaStandEntryTime[ninja] ?: stateTime)
-                val settleIdx = (elapsed * 24f).toInt().coerceIn(0, 10)  // 0..10 → frames 1..11
+                val elapsed   = stateTime - (ninjaStandEntryTime[ninja] ?: stateTime)
+                val settleIdx = (elapsed * 24f).toInt().coerceIn(0, 10)
                 fr("ninja", settleIdx + 1)
+            }
+
+            Ninja.State.CELEBRATING -> {
+                // Play the chosen celebration clip at 40fps (Flash timeline rate), then hold last frame.
+                val elapsed    = stateTime - (ninjaStandEntryTime[ninja] ?: stateTime)
+                val frameCount = celebEndFrame - celebStartFrame + 1
+                val frameIdx   = (elapsed * FPS_CELEBRATE).toInt().coerceAtMost(frameCount - 1)
+                fr("ninja", celebStartFrame + frameIdx)
             }
 
             Ninja.State.RUNNING -> {
@@ -780,9 +854,9 @@ class GameRenderer : Disposable {
         while (iter.hasNext()) {
             val e = iter.next()
             e.elapsed += dt
-            val totalDuration = e.frameCount / 40f
+            val totalDuration = e.frameCount / FPS_EFFECTS
             if (e.elapsed >= totalDuration) { iter.remove(); continue }
-            val frame = ((e.elapsed * 40f).toInt() + 1).coerceIn(1, e.frameCount)
+            val frame = ((e.elapsed * FPS_EFFECTS).toInt() + 1).coerceIn(1, e.frameCount)
             val reg = fxAtlas.findRegion("${e.dir}/$frame") ?: continue
             batch.draw(reg,
                 e.x - e.originX, fy(e.y) - e.originY,

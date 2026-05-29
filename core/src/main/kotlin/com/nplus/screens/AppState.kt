@@ -22,4 +22,7 @@ sealed class AppState {
         val level: Int,
         val startingTicks: Int = SimGlobals.DEFAULT_TIMER_TICKS
     ) : AppState()
+
+    /** Settings screen (controls display, ninja colour picker). */
+    object Settings : AppState()
 }

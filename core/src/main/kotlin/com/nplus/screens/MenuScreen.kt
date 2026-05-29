@@ -124,7 +124,7 @@ class MenuScreen(private val appState: AppStateManager,
         fontSm = makeFont("fonts/uni05_8.ttf", 8)
         fontMd = makeFont("fonts/uni05_16.ttf", 16)
         fontLg = makeFont("fonts/uni05_20.ttf", 20)
-        fontXl = makeFont("fonts/uni05_32.ttf", 32)
+        fontXl = makeFont("fonts/uni05_32.ttf", 128)
 
         // Load tile atlas with linear filter for smooth level preview downscaling
         tileAtlas = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
@@ -183,7 +183,7 @@ class MenuScreen(private val appState: AppStateManager,
     override fun render(delta: Float) {
         handleInput()
 
-        Gdx.gl.glClearColor(COL_BORDER.r, COL_BORDER.g, COL_BORDER.b, 1f)
+        Gdx.gl.glClearColor(COL_BG.r, COL_BG.g, COL_BG.b, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
@@ -272,6 +272,7 @@ class MenuScreen(private val appState: AppStateManager,
         if (appState.progress.hasSave) add("Continue")
         add("New Game")
         add("Episodes")
+        add("Settings")
     }
 
     private fun navigateMainMenu(up: Boolean, down: Boolean, confirm: Boolean) {
@@ -284,6 +285,7 @@ class MenuScreen(private val appState: AppStateManager,
                                                  appState.progress.lastLevel)
                 "New Game" -> { confirmCursor = 1; menuState = MenuState.CONFIRM_NEW_GAME }
                 "Episodes" -> { menuState = MenuState.EPISODE_GRID }
+                "Settings" -> appState.goToSettings()
             }
         }
     }
@@ -338,7 +340,7 @@ class MenuScreen(private val appState: AppStateManager,
         // Title
         batch.begin()
         fontXl.color = COL_TEXT_DARK
-        drawTextCentred(fontXl, "N+", centreX, 490f)
+        drawTextCentred(fontXl, "n+", centreX, 545f)
         batch.end()
 
         // Item rows
@@ -363,8 +365,8 @@ class MenuScreen(private val appState: AppStateManager,
             fontLg.color = if (i == mainCursor) COL_TEXT_DARK else COL_TEXT_DIM
             drawTextCentred(fontLg, items[i], centreX, rowY)
         }
-        fontSm.color = COL_TEXT_DIM
-        drawTextCentred(fontSm, "↑↓ move   Enter/A select", centreX, 38f)
+        fontMd.color = COL_TEXT_DIM
+        drawTextCentred(fontMd, "Enter/A select", centreX, 38f)
         batch.end()
     }
 
@@ -377,11 +379,11 @@ class MenuScreen(private val appState: AppStateManager,
 
         batch.begin()
         fontXl.color = COL_TEXT_DARK
-        drawTextCentred(fontXl, "N+", centreX, 490f)
+        drawTextCentred(fontXl, "n+", centreX, 545f)
         fontLg.color = COL_TEXT_DARK
         drawTextCentred(fontLg, "Start a new game?", centreX, 380f)
-        fontSm.color = COL_TEXT_DIM
-        drawTextCentred(fontSm, "This will erase all progress.", centreX, 348f)
+        fontMd.color = COL_TEXT_DIM
+        drawTextCentred(fontMd, "This will erase all progress.", centreX, 348f)
         batch.end()
 
         layout.setText(fontLg, "Yes, start over")
@@ -444,24 +446,31 @@ class MenuScreen(private val appState: AppStateManager,
         batch.begin()
         fontMd.color = COL_TEXT_DARK
         drawText(fontMd, "play game", GRID_LEFT + 4f, 590f)
-        fontSm.color = COL_TEXT_DIM
-        drawText(fontSm, "select episode", GRID_LEFT + 4f, 566f)
+        fontMd.color = COL_TEXT_DIM
+        drawText(fontMd, "select episode", GRID_LEFT + 4f, 566f)
 
         // Episode labels
         for (ep in 0 until visible) {
             val (cx, cy) = cellPos(ep)
-            fontSm.color = when {
+            fontMd.color = when {
                 ep == episodeCursor     -> COL_TEXT_DARK
                 progress.isBeaten(ep)  -> COL_TEXT_BEAT
                 progress.isUnlocked(ep)-> COL_TEXT_DARK
                 else                   -> COL_TEXT_LOCK
             }
-            drawTextCentred(fontSm, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + 4f)
+            drawTextCentred(fontMd, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + 4f)
+        }
+
+        // Episode record (only shown once a record exists)
+        val rec = progress.getEpisodeRecord(episodeCursor)
+        if (rec >= 0) {
+            fontMd.color = COL_TEXT_DIM
+            drawText(fontMd, "RECORD: ${formatTicks(rec)}", GRID_LEFT + 4f, 52f)
         }
 
         // Hint bar
-        fontSm.color = COL_TEXT_DIM
-        drawText(fontSm, "Enter/A play   Esc/B back", GRID_LEFT, 20f)
+        fontMd.color = COL_TEXT_DIM
+        drawText(fontMd, "Enter/A play   Esc/B back", GRID_LEFT, 20f)
         batch.end()
 
         // Right panel thumbnails
@@ -493,12 +502,13 @@ class MenuScreen(private val appState: AppStateManager,
             shape.rect(previewX + borderSz, miniY + borderSz,
                        MINI_W - borderSz * 2f, MINI_H - borderSz * 2f)
             shape.color = COL_BORDER
+            val eps = 0.35f   // closes sub-pixel gaps between adjacent solid-tile rects
             for (row in 1 until MINI_ROWS - 1) {
                 for (col in 1 until MINI_COLS - 1) {
                     if (data.tileIds[(col - 1) + (row - 1) * interiorCols] != 1) continue
-                    shape.rect(previewX + col * tileW,
-                               miniY + (MINI_ROWS - 1 - row) * tileH,
-                               tileW, tileH)
+                    shape.rect(previewX + col * tileW - eps,
+                               miniY + (MINI_ROWS - 1 - row) * tileH - eps,
+                               tileW + eps * 2f, tileH + eps * 2f)
                 }
             }
         }
@@ -529,17 +539,16 @@ class MenuScreen(private val appState: AppStateManager,
         val tileW = MINI_W / MINI_COLS.toFloat()   // = 4f
         val tileH = MINI_H / MINI_ROWS.toFloat()   // = 4f
         val interiorCols = MINI_COLS - 2   // 31
-        // Boundary ring (row 0/24, col 0/32) has no sprite (transparent); it's the COL_BORDER
-        // fill drawn by ShapeRenderer in Pass 1. Only draw interior tiles here.
+        val eps = 0.35f
         for (row in 1 until MINI_ROWS - 1) {
             for (col in 1 until MINI_COLS - 1) {
                 val type = tileIds[(col - 1) + (row - 1) * interiorCols]
                 if (type == 0 || type == 1) continue  // 0=empty, 1=solid drawn by ShapeRenderer
                 val region = tileRegions.getOrNull(type) ?: continue
                 batch.draw(region,
-                    x + col * tileW,
-                    y + (MINI_ROWS - 1 - row) * tileH,
-                    tileW, tileH)
+                    x + col * tileW - eps,
+                    y + (MINI_ROWS - 1 - row) * tileH - eps,
+                    tileW + eps * 2f, tileH + eps * 2f)
             }
         }
     }
@@ -591,6 +600,13 @@ class MenuScreen(private val appState: AppStateManager,
             else     -> 'b'
         }
         return "$tensChar${ep % 10}"
+    }
+
+    private fun formatTicks(ticks: Int): String {
+        val secs = ticks / com.nplus.SimGlobals.SIM_RATE
+        val intPart = secs.toInt()
+        val fracPart = ((secs - intPart) * 1000).toInt()
+        return "$intPart.${fracPart.toString().padStart(3, '0')}"
     }
 
     private fun drawText(font: BitmapFont, text: String, x: Float, y: Float) {
