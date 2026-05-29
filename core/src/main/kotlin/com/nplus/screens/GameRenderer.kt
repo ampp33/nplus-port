@@ -35,6 +35,10 @@ class GameRenderer : Disposable {
         // Interior level background (inside the 792×600 canvas): original stage bg #CACAD0
         private val COL_LEVEL_BG = Color(202/255f, 202/255f, 208/255f, 1f)
 
+        // Sprites are exported at 3× the original Flash canvas size.
+        // Divide all region pixel dimensions by this factor to get game-world units.
+        private const val SPRITE_SCALE = 3f
+
         // Ragdoll sprite names per stick index (body, R-arm, L-arm, R-leg, L-leg)
         private val RAGDOLL_SPRITE = arrayOf("ragdoll_body", "ragdoll_arm", "ragdoll_arm", "ragdoll_leg", "ragdoll_leg")
         // flipList[i] = scaleY sign from AS3 (body=-1, arms=+1, legs=-1)
@@ -197,14 +201,15 @@ class GameRenderer : Disposable {
         ninjaAtlas   = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
         ragdollAtlas = TextureAtlas(Gdx.files.internal("atlas/ragdoll.atlas"))
         fxAtlas      = TextureAtlas(Gdx.files.internal("atlas/fx.atlas"))
-        // Enforce nearest-neighbour filtering regardless of what the .atlas file says.
-        // Some Android GPU drivers ignore the atlas hint and default to LINEAR, which
-        // causes UV bleeding at non-integer scale factors.
-        atlas.textures.forEach { it.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest) }
+        // Sprites are at 3x resolution; atlas is packed with Linear filter.
+        // Enforce it in case any GPU driver overrides the atlas hint.
+        atlas.textures.forEach { it.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear) }
+        // Each tile PNG is 216×216 (3× original 72×72) with 72px transparent padding on each side.
+        // Extract the centre 72×72 region and draw it at 24×24 game units (explicit in drawTiles).
         sprTileRegions = Array(42) { t ->
             val r = atlas.findRegion("tiles/${t + 1}")
                 ?: error("Atlas missing region: tiles/${t + 1}")
-            TextureRegion(r.texture, r.regionX + 24, r.regionY + 24, 24, 24)
+            TextureRegion(r.texture, r.regionX + 72, r.regionY + 72, 72, 72)
         }
         val gen8 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_8.ttf"))
         val p8 = FreeTypeFontParameter().apply {
@@ -517,22 +522,22 @@ class GameRenderer : Disposable {
 
     /** Draw [reg] centred at game position (px, py). Canvas centre = registration point. */
     private fun drawCentered(reg: TextureRegion, px: Float, py: Float) {
-        batch.draw(reg, px - reg.regionWidth / 2f, fy(py) - reg.regionHeight / 2f)
+        val gw = reg.regionWidth / SPRITE_SCALE; val gh = reg.regionHeight / SPRITE_SCALE
+        batch.draw(reg, px - gw / 2f, fy(py) - gh / 2f, gw, gh)
     }
 
     /**
      * Draw a gold sprite frame centred on the entity physics position.
      *
-     * FFDec canvas is 6×54; the atlas preserves the full canvas per frame (mostly transparent).
-     * Idle coin content sits in the bottom 8 rows (rows 46–53 from top = bottom of the canvas
-     * in libGDX y-up space). The -4f y-offset centres those 8 rows on the physics position.
-     * The canvas is only 6 px wide but the coin content is 8 px tall, so drawing at natural
-     * width produces a visibly rectangular coin. Widening the draw to 8 units matches the
-     * content height and makes the coin appear square — the transparent upper rows are
-     * unaffected, and the slight horizontal stretch is imperceptible with nearest filtering.
+     * FFDec canvas is 18×160 (3× of original 6×54); the atlas preserves the full canvas.
+     * Idle coin content sits in the bottom ~19px (bottom of canvas = libGDX y-up bottom).
+     * At 3× the coin renders as a naturally proportioned ~18×19px shape, so we draw at
+     * natural width (gw = 18/3 = 6f) and centre horizontally. The -4f y-offset keeps
+     * the coin near the physics position (coin occupies bottom ~6 units of the 53-unit canvas).
      */
     private fun drawGoldTex(reg: TextureRegion, px: Float, py: Float) {
-        batch.draw(reg, px - 4f, fy(py) - 4f, 8f, reg.regionHeight.toFloat())
+        val gw = reg.regionWidth / SPRITE_SCALE; val gh = reg.regionHeight / SPRITE_SCALE
+        batch.draw(reg, px - gw / 2f, fy(py) - 4f, gw, gh)
     }
 
     /**
@@ -540,7 +545,7 @@ class GameRenderer : Disposable {
      * Canvas is 61×11; body at x≈55.5, y-centre at 5.5. Rotation: negate atan2(dy,dx) for libGDX CCW.
      */
     private fun drawRocketTex(reg: TextureRegion, px: Float, py: Float, ornDeg: Float) {
-        val w = reg.regionWidth.toFloat(); val h = reg.regionHeight.toFloat()
+        val w = reg.regionWidth / SPRITE_SCALE; val h = reg.regionHeight / SPRITE_SCALE
         val ox = 55.5f; val oy = h / 2f
         batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, 1f, 1f, ornDeg)
     }
@@ -569,8 +574,8 @@ class GameRenderer : Disposable {
      * Uses canvas centre as both the draw anchor and the rotation origin.
      */
     private fun drawRotated(reg: TextureRegion, px: Float, py: Float, angleDeg: Float) {
-        val w = reg.regionWidth.toFloat(); val h = reg.regionHeight.toFloat()
-        val ox = w / 2f;                  val oy = h / 2f
+        val w = reg.regionWidth / SPRITE_SCALE; val h = reg.regionHeight / SPRITE_SCALE
+        val ox = w / 2f;                        val oy = h / 2f
         batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, 1f, 1f, angleDeg)
     }
 
@@ -710,12 +715,12 @@ class GameRenderer : Disposable {
                 else
                     1
                 val reg = fr("launchpad", frame)
-                val h = reg.regionHeight.toFloat()
+                val gw = reg.regionWidth / SPRITE_SCALE; val gh = reg.regionHeight / SPRITE_SCALE
                 // Flash registration at left-center (0, h/2): sprite extends along the normal direction.
                 // Using +normalAngleDeg (not negated) with origin at left edge correctly maps the
                 // sprite's x-extent (its 5px narrow dimension) outward along the surface normal.
-                batch.draw(reg, e.getPos().x, fy(e.getPos().y) - h / 2f,
-                    0f, h / 2f, reg.regionWidth.toFloat(), h, 1f, 1f, normalAngleDeg(n.x, n.y))
+                batch.draw(reg, e.getPos().x, fy(e.getPos().y) - gh / 2f,
+                    0f, gh / 2f, gw, gh, 1f, 1f, normalAngleDeg(n.x, n.y))
             }
 
             is OnewayPlatformEntity -> {
@@ -782,6 +787,7 @@ class GameRenderer : Disposable {
     }
 
     private fun drawNinjaTex(reg: TextureRegion, px: Float, py: Float, facing: Float, ornDeg: Float) {
+        // Ninja frames are 1x (187×140 px), always downscaled to ~37×28 game units. No SPRITE_SCALE.
         val w = reg.regionWidth * 0.2f; val h = reg.regionHeight * 0.2f
         val ox = w / 2f; val oy = h / 2f - 2f
         batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, facing, 1f, ornDeg)
@@ -846,6 +852,7 @@ class GameRenderer : Disposable {
             val s      = rag.getStickRenderData(i)
             val spName = RAGDOLL_SPRITE[i]
             val reg    = ragdollAtlas.findRegion("$spName/${s.frame}") ?: continue
+            // Ragdoll frames are 1x, same downscale as ninja. No SPRITE_SCALE.
             val w      = reg.regionWidth  * 0.2f
             val h      = reg.regionHeight * 0.2f
             // Registration at left-center (p0 = stick origin) in sprite local space.
@@ -886,7 +893,7 @@ class GameRenderer : Disposable {
         val dir = if (Math.random() < 0.5) "fx_dust0" else "fx_dust1"
         val frameCount = if (dir == "fx_dust0") 33 else 31
         val reg = fxAtlas.findRegion("$dir/1") ?: return
-        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+        val natW = reg.regionWidth / SPRITE_SCALE; val natH = reg.regionHeight / SPRITE_SCALE
         val absW = abs(flashScaleX) * natW; val absH = abs(flashScaleY) * natH
         // Registration at left-center: dust origin at (p.x, p.y), spray extends right/away.
         effects += SpriteEffect(dir, frameCount, 0f, x, y,
@@ -940,7 +947,7 @@ class GameRenderer : Disposable {
                         val dir = if (rnd() < 0.5f) "fx_blood0" else "fx_blood1"
                         val fc  = if (dir == "fx_blood0") 19 else 32
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
-                        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+                        val natW = reg.regionWidth / SPRITE_SCALE; val natH = reg.regionHeight / SPRITE_SCALE
                         val bx = e.x - (rnd() * 8 - 4)
                         val by = e.y - (rnd() * 8 - 4)
                         val fsx = (e.vx * (6 + rnd() * 3) - (rnd() * 60 - 30))
@@ -964,7 +971,7 @@ class GameRenderer : Disposable {
                         val dir = "fx_rocket_smoke$variant"
                         val fc  = when (variant) { 0 -> 28; 1 -> 23; else -> 27 }
                         val reg = fxAtlas.findRegion("$dir/1") ?: continue
-                        val natW = reg.regionWidth.toFloat(); val natH = reg.regionHeight.toFloat()
+                        val natW = reg.regionWidth / SPRITE_SCALE; val natH = reg.regionHeight / SPRITE_SCALE
                         val fsx = (20 + rnd() * 20) / 100f
                         val fsy = (20 + rnd() * 20) / 100f
                         val rot = e.angleDeg + (10 * (rnd() * 2 - 1))
@@ -984,7 +991,7 @@ class GameRenderer : Disposable {
                         val dir = "fx_zap$v"
                         val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
-                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val nw = reg.regionWidth / SPRITE_SCALE; val nh = reg.regionHeight / SPRITE_SCALE
                         val sx = (30 + rnd() * 30) / 100f; val sy = (30 + rnd() * 20) / 100f
                         val rot = e.angleDeg + 20f * (rnd() * 2f - 1f)
                         effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
@@ -999,7 +1006,7 @@ class GameRenderer : Disposable {
                         val dir = "fx_zap$v"
                         val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
-                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val nw = reg.regionWidth / SPRITE_SCALE; val nh = reg.regionHeight / SPRITE_SCALE
                         val px = e.x + e.vx; val py = e.y - e.vy + e.vy * rnd()
                         val sx = (4f * e.vx + 20f * (rnd() * 2f - 1f)) / 100f
                         val sy = (60 + 60 * rnd()) / 100f
@@ -1015,7 +1022,7 @@ class GameRenderer : Disposable {
                         val dir = "fx_zapv$v"
                         val fc  = when (v) { 0 -> 10; 1 -> 13; else -> 15 }
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
-                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val nw = reg.regionWidth / SPRITE_SCALE; val nh = reg.regionHeight / SPRITE_SCALE
                         val px = e.x - e.vx + e.vx * rnd(); val py = e.y + e.vy
                         val sy = (4f * e.vy + 20f * (rnd() * 2f - 1f)) / 100f
                         val sx = (60 + 60 * rnd()) / 100f
@@ -1033,7 +1040,7 @@ class GameRenderer : Disposable {
                         val v = (rnd() * 2).toInt().coerceIn(0, 1)
                         val dir = "fx_fireburst$v"; val fc = if (v == 0) 19 else 17
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@run
-                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val nw = reg.regionWidth / SPRITE_SCALE; val nh = reg.regionHeight / SPRITE_SCALE
                         val sw = (15 + r1 * 15) / 100f; val sh = (15 + r2 * 15) / 100f
                         effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
                             rotation = 0f, w = sw*nw, h = sh*nh, sx = 1f, sy = 1f,
@@ -1052,7 +1059,7 @@ class GameRenderer : Disposable {
                         val dir = "fx_fireball$v"
                         val fc  = when (v) { 0 -> 15; 1 -> 14; else -> 11 }
                         val reg = fxAtlas.findRegion("$dir/1") ?: return@repeat
-                        val nw = reg.regionWidth.toFloat(); val nh = reg.regionHeight.toFloat()
+                        val nw = reg.regionWidth / SPRITE_SCALE; val nh = reg.regionHeight / SPRITE_SCALE
                         val sw = fbSxArr[j]; val sh = fbSyArr[j]
                         effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
                             rotation = -fbRots[j], w = sw*nw, h = sh*nh, sx = 1f, sy = 1f,

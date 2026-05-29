@@ -131,10 +131,11 @@ class MenuScreen(private val appState: AppStateManager,
         tileAtlas.textures.forEach {
             it.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear)
         }
-        // Extract the 24×24 content centre from each 72×72 canvas (same as GameRenderer)
+        // Extract the 72×72 content centre from each 216×216 canvas (tiles exported at 3×,
+        // 72px transparent padding on each side — same offset as GameRenderer).
         for (i in 1..42) {
             val r = tileAtlas.findRegion("tiles/$i") ?: continue
-            tileRegions[i - 1] = TextureRegion(r.texture, r.regionX + 24, r.regionY + 24, 24, 24)
+            tileRegions[i - 1] = TextureRegion(r.texture, r.regionX + 72, r.regionY + 72, 72, 72)
         }
 
         // Entity sprite regions: frame 1 of each entity type's sprite directory.
@@ -484,44 +485,59 @@ class MenuScreen(private val appState: AppStateManager,
         val gapH = (panelTop - panelBot - 5f * MINI_H) / 6f
         val previewX = PANEL_X + 6f
 
-        val borderSz    = MINI_CELL.toFloat()          // 4f = 1 boundary tile
-        val tileW       = MINI_W / MINI_COLS.toFloat() // 4f
-        val tileH       = MINI_H / MINI_ROWS.toFloat() // 4f
-        val interiorCols = MINI_COLS - 2               // 31
+        val borderSz     = MINI_CELL.toFloat()          // 4f = 1 boundary tile
+        val tileW        = MINI_W / MINI_COLS.toFloat() // 4f
+        val tileH        = MINI_H / MINI_ROWS.toFloat() // 4f
+        val interiorCols = MINI_COLS - 2                // 31
+        val eps          = 0.35f   // closes sub-pixel gaps between adjacent solid-tile rects
 
-        // Pass 1 (ShapeRenderer): background + type-1 solid tiles.
-        // Tile type 1's sprite is fully transparent (Flash used a plain fill, not a sprite).
-        // Render them as solid COL_BORDER rects so walls are visible.
+        fun miniY(lv: Int) = panelBot + gapH + (4 - lv) * (MINI_H + gapH)
+
+        // Pass 1 (ShapeRenderer): level backgrounds only.
         shape.begin(ShapeRenderer.ShapeType.Filled)
         for (lv in 0..4) {
-            val data  = appState.levelMap[ep to lv] ?: continue
-            val miniY = panelBot + gapH + (4 - lv) * (MINI_H + gapH)
+            if (appState.levelMap[ep to lv] == null) continue
+            val my = miniY(lv)
             shape.color = COL_BORDER
-            shape.rect(previewX, miniY, MINI_W, MINI_H)
+            shape.rect(previewX, my, MINI_W, MINI_H)
             shape.color = COL_BG
-            shape.rect(previewX + borderSz, miniY + borderSz,
+            shape.rect(previewX + borderSz, my + borderSz,
                        MINI_W - borderSz * 2f, MINI_H - borderSz * 2f)
-            shape.color = COL_BORDER
-            val eps = 0.35f   // closes sub-pixel gaps between adjacent solid-tile rects
+        }
+        shape.end()
+
+        // Pass 2 (SpriteBatch): entity sprites — drawn before solid walls so walls occlude them.
+        batch.begin()
+        batch.setColor(Color.WHITE)
+        for (lv in 0..4) {
+            val data = appState.levelMap[ep to lv] ?: continue
+            drawLevelEntities(data.entities, previewX, miniY(lv))
+        }
+        batch.end()
+
+        // Pass 3 (ShapeRenderer): type-1 solid walls drawn on top of entities.
+        shape.begin(ShapeRenderer.ShapeType.Filled)
+        shape.color = COL_BORDER
+        for (lv in 0..4) {
+            val data = appState.levelMap[ep to lv] ?: continue
+            val my   = miniY(lv)
             for (row in 1 until MINI_ROWS - 1) {
                 for (col in 1 until MINI_COLS - 1) {
                     if (data.tileIds[(col - 1) + (row - 1) * interiorCols] != 1) continue
                     shape.rect(previewX + col * tileW - eps,
-                               miniY + (MINI_ROWS - 1 - row) * tileH - eps,
+                               my + (MINI_ROWS - 1 - row) * tileH - eps,
                                tileW + eps * 2f, tileH + eps * 2f)
                 }
             }
         }
         shape.end()
 
-        // Pass 2 (SpriteBatch): type 2+ tile sprites + entities
+        // Pass 4 (SpriteBatch): type 2+ tile sprites on top.
         batch.begin()
         batch.setColor(Color.WHITE)
         for (lv in 0..4) {
-            val data  = appState.levelMap[ep to lv] ?: continue
-            val miniY = panelBot + gapH + (4 - lv) * (MINI_H + gapH)
-            drawLevelTiles(data.tileIds, previewX, miniY)
-            drawLevelEntities(data.entities, previewX, miniY)
+            val data = appState.levelMap[ep to lv] ?: continue
+            drawLevelTiles(data.tileIds, previewX, miniY(lv))
         }
         batch.end()
     }
@@ -563,10 +579,16 @@ class MenuScreen(private val appState: AppStateManager,
         for (e in entities) {
             if (e.type == EntityTypes.PLAYER) continue
             val region = entityRegions[e.type] ?: continue
-            val dispW = region.regionWidth  * scale
-            val dispH = region.regionHeight * scale
+            // Sprites are at 3× resolution; divide back to game-unit size before minimap scaling.
+            val dispW = (region.regionWidth  / 3f) * scale
+            val dispH = (region.regionHeight / 3f) * scale
             val drawX = x + e.worldX * scale - dispW / 2f
-            val drawY = y + (600f - e.worldY) * scale - dispH / 2f
+            // Gold canvas is tall (coin only at bottom); use the same -4 game-unit offset as
+            // GameRenderer.drawGoldTex instead of centering by canvas height.
+            val drawY = if (e.type == EntityTypes.GOLD)
+                y + (600f - e.worldY) * scale - 4f * scale
+            else
+                y + (600f - e.worldY) * scale - dispH / 2f
             val rotDeg = if (e.type == EntityTypes.THWOMP) thwompRotDeg(e.dir) else 0f
             batch.draw(region, drawX, drawY, dispW / 2f, dispH / 2f, dispW, dispH, 1f, 1f, rotDeg)
         }

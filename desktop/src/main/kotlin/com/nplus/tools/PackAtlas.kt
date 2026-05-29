@@ -27,7 +27,7 @@ fun main(args: Array<String>) {
     }, assetsDir.resolve("ragdoll_sprites").absolutePath, args[1], "ragdoll")
     println("Packed: ${args[1]}/ragdoll.atlas")
 
-    // fx.atlas — particle effect sprites, Nearest filtering.
+    // fx.atlas — particle effect sprites, Linear filtering (3x source, same rationale as sprites).
     TexturePacker.process(TexturePacker.Settings().apply {
         maxWidth              = 4096
         maxHeight             = 4096
@@ -40,14 +40,14 @@ fun main(args: Array<String>) {
         paddingX              = 2
         paddingY              = 2
         edgePadding           = true
-        filterMin             = Texture.TextureFilter.Nearest
-        filterMag             = Texture.TextureFilter.Nearest
+        filterMin             = Texture.TextureFilter.Linear
+        filterMag             = Texture.TextureFilter.Linear
     }, assetsDir.resolve("fx_sprites").absolutePath, args[1], "fx")
     println("Packed: ${args[1]}/fx.atlas")
 
-    // sprites.atlas — all sprites, Nearest filtering.
-    // Tiles/entities drawn at ~1:1 scale; Nearest gives exact sampling with no bleeding.
-    // Ninja regions are included but unused at runtime (ninja.atlas takes precedence).
+    // sprites.atlas — all sprites, Linear filtering.
+    // Sprites are 3x resolution; at the ~2.3x viewport scale they are slightly downscaled.
+    // Linear filter gives clean sampling without the pixelation of Nearest.
     TexturePacker.process(TexturePacker.Settings().apply {
         maxWidth              = 4096
         maxHeight             = 4096
@@ -60,14 +60,15 @@ fun main(args: Array<String>) {
         paddingX              = 2
         paddingY              = 2
         edgePadding           = true
-        filterMin             = Texture.TextureFilter.Nearest
-        filterMag             = Texture.TextureFilter.Nearest
+        filterMin             = Texture.TextureFilter.Linear
+        filterMag             = Texture.TextureFilter.Linear
     }, args[0], args[1], "sprites")
     println("Packed: ${args[1]}/sprites.atlas")
 
     // ninja.atlas — ninja frames only, Linear filtering.
-    // Ninja sprites are 187×140 px Flash vector exports rendered at 0.2× (~37 px).
-    // Linear filtering preserves stroke weight on the 5× downscale.
+    // Ninja sprites are 561×420 px (3× Flash canvas) rendered at 0.2/3× scale (~37 px).
+    // Source dir is assets/ninja_sprites/ (outside assets/sprites/ so they are not
+    // also packed into sprites.atlas, which would waste 3 extra 4096×4096 pages).
     TexturePacker.process(TexturePacker.Settings().apply {
         maxWidth              = 4096
         maxHeight             = 4096
@@ -82,6 +83,6 @@ fun main(args: Array<String>) {
         edgePadding           = true
         filterMin             = Texture.TextureFilter.Linear
         filterMag             = Texture.TextureFilter.Linear
-    }, File(args[0], "ninja").absolutePath, args[1], "ninja")
+    }, assetsDir.resolve("ninja_sprites").absolutePath, args[1], "ninja")
     println("Packed: ${args[1]}/ninja.atlas")
 }
