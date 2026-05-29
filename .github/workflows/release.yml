@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Desktop (Windows / macOS / Linux) ───────────────────────────────────────
+  desktop:
+    name: Desktop — ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            package-type: deb
+            asset-glob: "dist/*.deb"
+          - os: windows-latest
+            name: windows
+            package-type: exe
+            asset-glob: "dist/*.exe"
+          - os: macos-latest
+            name: macos
+            package-type: dmg
+            asset-glob: "dist/*.dmg"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Build desktop fat JAR
+        run: ./gradlew :desktop:jar
+        shell: bash
+
+      # jpackage requires a plain numeric version (e.g. 1.2.3), not "v1.2.3"
+      - name: Derive app version
+        id: ver
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          # Fall back to 1.0.0 for non-semver tags
+          [[ "$V" =~ ^[0-9]+(\.[0-9]+)*$ ]] || V="1.0.0"
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Package with jpackage
+        shell: bash
+        run: |
+          jpackage \
+            --input desktop/build/libs \
+            --main-jar desktop.jar \
+            --name "nplus" \
+            --app-version "${{ steps.ver.outputs.value }}" \
+            --type ${{ matrix.package-type }} \
+            --dest dist
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset-glob }}
+
+  # ── Android APK ─────────────────────────────────────────────────────────────
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses \
+            > /dev/null 2>&1 || true
+
+      - name: Install required SDK components
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      - name: Build Android debug APK
+        run: ./gradlew :android:assembleDebug
+
+      - name: Rename APK for release
+        run: |
+          cp android/build/outputs/apk/debug/android-debug.apk \
+             nplus-android.apk
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nplus-android.apk
