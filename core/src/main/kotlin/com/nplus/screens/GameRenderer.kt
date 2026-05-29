@@ -63,6 +63,9 @@ class GameRenderer : Disposable {
         // Timer bar (drawn just above the level interior at y = WORLD_H)
         // Original TimeBar sprite is 625×12 px, so BAR_H = 12 world units.
         private const val BAR_H = 12f
+        // Vertical padding (world units) added above and below the content block (level + timer bar)
+        // so the level fills the screen with a small breathing margin instead of large gray borders.
+        private const val VIEWPORT_PAD_V = 16f
         // BAR_NORMAL_W = bar width at fraction 1.0 (current == starting ticks).
         // Matches the original timebar sprite proportion: 624 px of content on a ~800 px stage ≈ 78%.
         // Leaving ~22% of WORLD_W on the right so gold overflow can extend the fill visually.
@@ -106,7 +109,7 @@ class GameRenderer : Disposable {
     }
 
     private val camera   = OrthographicCamera()
-    private val viewport = ExtendViewport(1280f, 720f, camera)
+    private val viewport = ExtendViewport(WORLD_W, WORLD_H + BAR_H + VIEWPORT_PAD_V, camera)
     private val shape    = ShapeRenderer()
     private val batch    = SpriteBatch()
     private var stateTime = 0f
@@ -179,8 +182,8 @@ class GameRenderer : Disposable {
     private val glyphLayout = GlyphLayout()
 
     init {
-        camera.setToOrtho(false, 1280f, 720f)
-        camera.position.set(WORLD_W / 2f, WORLD_H / 2f, 0f)
+        camera.setToOrtho(false, WORLD_W, WORLD_H + BAR_H + VIEWPORT_PAD_V)
+        camera.position.set(WORLD_W / 2f, (WORLD_H + BAR_H) / 2f, 0f)
         camera.update()
         loadSprites()
     }
@@ -194,6 +197,10 @@ class GameRenderer : Disposable {
         ninjaAtlas   = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
         ragdollAtlas = TextureAtlas(Gdx.files.internal("atlas/ragdoll.atlas"))
         fxAtlas      = TextureAtlas(Gdx.files.internal("atlas/fx.atlas"))
+        // Enforce nearest-neighbour filtering regardless of what the .atlas file says.
+        // Some Android GPU drivers ignore the atlas hint and default to LINEAR, which
+        // causes UV bleeding at non-integer scale factors.
+        atlas.textures.forEach { it.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest) }
         sprTileRegions = Array(42) { t ->
             val r = atlas.findRegion("tiles/${t + 1}")
                 ?: error("Atlas missing region: tiles/${t + 1}")
@@ -241,7 +248,7 @@ class GameRenderer : Disposable {
 
     fun resize(width: Int, height: Int) {
         viewport.update(width, height, false)
-        camera.position.set(WORLD_W / 2f, WORLD_H / 2f, 0f)
+        camera.position.set(WORLD_W / 2f, (WORLD_H + BAR_H) / 2f, 0f)
         camera.update()
     }
 
@@ -492,11 +499,15 @@ class GameRenderer : Disposable {
         val cols = Simulator.GRID_NUM_COLS
         val rows = Simulator.GRID_NUM_ROWS
         val cs   = Simulator.GRID_CELL_SIZE
+        // Same 0.5-unit expansion as the FULL-tile ShapeRenderer pass: prevents 1-pixel gaps
+        // between adjacent tiles at non-integer scale factors on high-DPI Android screens.
+        val E = 0.5f
         for (row in 0 until rows) for (col in 0 until cols) {
             val t = tileGrid[col + row * cols]
             if (t == TileTypes.EMPTY || t == TileTypes.FULL) continue  // FULL drawn in pre-pass
-            // sprTileRegions[t] is the pre-extracted 24×24 centre of the 72×72 tile canvas.
-            batch.draw(sprTileRegions[t], col * cs, fy((row + 1) * cs))
+            batch.draw(sprTileRegions[t],
+                col * cs - E, fy((row + 1) * cs) - E,
+                cs + 2 * E, cs + 2 * E)
         }
     }
 
@@ -512,13 +523,16 @@ class GameRenderer : Disposable {
     /**
      * Draw a gold sprite frame centred on the entity physics position.
      *
-     * FFDec canvas is 6×54; registration = canvas centre (row 27). Idle coin
-     * content is at rows 46–53 (centre row ≈ 49.5 = 3.5 px from canvas bottom).
-     * Shifting 4 px below the entity screen-y centres the coin on the entity,
-     * giving equal visual distance from floor and ceiling surfaces.
+     * FFDec canvas is 6×54; the atlas preserves the full canvas per frame (mostly transparent).
+     * Idle coin content sits in the bottom 8 rows (rows 46–53 from top = bottom of the canvas
+     * in libGDX y-up space). The -4f y-offset centres those 8 rows on the physics position.
+     * The canvas is only 6 px wide but the coin content is 8 px tall, so drawing at natural
+     * width produces a visibly rectangular coin. Widening the draw to 8 units matches the
+     * content height and makes the coin appear square — the transparent upper rows are
+     * unaffected, and the slight horizontal stretch is imperceptible with nearest filtering.
      */
     private fun drawGoldTex(reg: TextureRegion, px: Float, py: Float) {
-        batch.draw(reg, px - reg.regionWidth / 2f, fy(py) - 4f)
+        batch.draw(reg, px - 4f, fy(py) - 4f, 8f, reg.regionHeight.toFloat())
     }
 
     /**
