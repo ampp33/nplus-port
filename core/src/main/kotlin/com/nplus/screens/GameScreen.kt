@@ -257,9 +257,15 @@ class GameScreen(
         // Stay in PAUSED; player unpauses explicitly with Jump or ESC
     }
 
-    override fun hide() {}
+    private var isDisposed = false
+
+    // LibGDX calls hide() but NOT dispose() when switching screens, so we dispose here.
+    // The guard prevents double-free if dispose() is later called explicitly.
+    override fun hide() = dispose()
 
     override fun dispose() {
+        if (isDisposed) return
+        isDisposed = true
         if (::renderer.isInitialized) renderer.dispose()
         audio.dispose()
     }
