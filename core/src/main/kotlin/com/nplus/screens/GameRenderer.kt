@@ -314,8 +314,7 @@ class GameRenderer : Disposable {
         batch.begin()
         drawTiles(sim.tileGrid)
         batch.setShader(ninjaShader)
-        batch.setColor(ninjaColor)
-        drawNinjaSprites(sim.players)
+        drawNinjaSprites(sim.players, ninjaColor)
         batch.setShader(null)
         batch.setColor(Color.WHITE)
         batch.end()
@@ -324,8 +323,7 @@ class GameRenderer : Disposable {
         batch.projectionMatrix = camera.combined
         batch.begin()
         batch.setShader(ninjaShader)
-        batch.setColor(ninjaColor)
-        for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja)
+        for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja, ninjaColor)
         batch.setShader(null)
         batch.setColor(Color.WHITE)
         tickAndDrawEffects(dt)
@@ -765,7 +763,8 @@ class GameRenderer : Disposable {
     // Ninja sprite rendering (SpriteBatch)
     // ---------------------------------------------------------------------------
 
-    private fun drawNinjaSprites(players: List<Ninja>) {
+    private fun drawNinjaSprites(players: List<Ninja>, ninjaColor: Color) {
+        batch.setColor(ninjaColor)
         for (ninja in players) {
             if (ninja.isDead()) continue
             val state = ninja.snapshotGfxState()
@@ -845,9 +844,10 @@ class GameRenderer : Disposable {
         }
     }
 
-    private fun drawRagdoll(ninja: Ninja) {
+    private fun drawRagdoll(ninja: Ninja, ninjaColor: Color) {
         val rag    = ninja.ragdoll
         val facing = ninja.getFacing()
+        batch.setColor(ninjaColor)
         for (i in 0 until rag.getStickCount()) {
             val s      = rag.getStickRenderData(i)
             val spName = RAGDOLL_SPRITE[i]
@@ -859,7 +859,7 @@ class GameRenderer : Disposable {
             // In the atlas the sprite canvas has p0 at the left edge, center height.
             val ox = 0f; val oy = h / 2f
             // libGDX: negate Flash rotation for y-up, flip sign for scaleY due to y-axis inversion
-            val rot   = -(s.ornRad * (180f / PI.toFloat()))
+            val rot    = -(s.ornRad * (180f / PI.toFloat()))
             val scaleY = RAGDOLL_FLIP[i] * facing
             batch.draw(reg, s.x0 - ox, fy(s.y0) - oy, ox, oy, w, h, 1f, scaleY, rot)
         }
