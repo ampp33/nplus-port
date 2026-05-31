@@ -51,7 +51,8 @@ class GamepadInputSource(
             left  = dLeft  || stickLeft,
             right = dRight || stickRight,
             jump  = c.getButton(m.buttonA),
-            pause = c.getButton(m.buttonStart)
+            pause = c.getButton(m.buttonY) || c.getButton(m.buttonStart),
+            quit  = c.getButton(m.buttonX)
         )
     }
 
