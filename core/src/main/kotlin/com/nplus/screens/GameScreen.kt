@@ -85,6 +85,7 @@ class GameScreen(
     private var prevK      = false
     private var prevQ      = false
     private var prevR      = false
+    private var prevQuit   = false
 
     // -----------------------------------------------------------------------
     // Screen lifecycle
@@ -108,6 +109,7 @@ class GameScreen(
         val nowQ     = Gdx.input.isKeyPressed(Input.Keys.Q)
         val nowR     = Gdx.input.isKeyPressed(Input.Keys.R)
         val nowP     = Gdx.input.isKeyPressed(Input.Keys.P)
+        val nowQuit  = inp.quit  // X button: pause in-game, quit when already paused
 
         when (playState) {
 
@@ -116,8 +118,8 @@ class GameScreen(
                 if (nowJump && !prevJump) {
                     playState = PlayState.GAME
                 }
-                if (nowPause && !prevPause) {
-                    // ESC before starting → back to menu immediately
+                if ((nowPause && !prevPause) || (nowQuit && !prevQuit)) {
+                    // ESC / X before starting → back to menu immediately
                     appState.goToMenu(); return
                 }
                 // R in pre-game: restart (resets to same startingTicks)
@@ -129,8 +131,8 @@ class GameScreen(
             PlayState.GAME -> {
                 audio.tick()
 
-                // ESC or P → pause
-                if ((nowPause && !prevPause) || (nowP && !prevP)) {
+                // ESC, P, or Y (pause) → pause; X (quit) also pauses as first step toward quit
+                if ((nowPause && !prevPause) || (nowP && !prevP) || (nowQuit && !prevQuit)) {
                     playState = PlayState.PAUSED
                     audio.pause()
                 }
@@ -181,9 +183,9 @@ class GameScreen(
             }
 
             PlayState.PAUSED -> {
-                // Q → quit to menu
-                if (nowQ && !prevQ) { appState.goToMenu(); return }
-                // Jump, ESC, or P → resume
+                // Q or X → quit to menu (X = second press: first paused, now exit)
+                if ((nowQ && !prevQ) || (nowQuit && !prevQuit)) { appState.goToMenu(); return }
+                // Jump, ESC, or Y → resume
                 if ((nowJump && !prevJump) || (nowPause && !prevPause) || (nowP && !prevP)) {
                     playState = PlayState.GAME
                     audio.resume()
@@ -224,8 +226,8 @@ class GameScreen(
                     if (nowJump && !prevJump) {
                         appState.levelFailed(episode, level, startingTicks); return
                     }
-                    // ESC → quit to menu
-                    if (nowPause && !prevPause) { appState.goToMenu(); return }
+                    // ESC or X → quit to menu
+                    if ((nowPause && !prevPause) || (nowQuit && !prevQuit)) { appState.goToMenu(); return }
                 }
             }
         }
@@ -236,6 +238,7 @@ class GameScreen(
         prevK     = nowK
         prevQ     = nowQ
         prevR     = nowR
+        prevQuit  = nowQuit
 
         renderer.render(currentSim, playState, currentTicks, startingTicks, levelLabel,
                         appState.progress.getNinjaColor())
@@ -295,6 +298,6 @@ class GameScreen(
         playState         = PlayState.PRE_GAME
         postGameCooldown  = 0
         celebElapsed      = 0f
-        prevJump = false; prevPause = false; prevP = false; prevK = false; prevQ = false; prevR = false
+        prevJump = false; prevPause = false; prevP = false; prevK = false; prevQ = false; prevR = false; prevQuit = false
     }
 }

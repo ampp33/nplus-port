@@ -176,11 +176,23 @@ class FloorGuardEntity(private val objGrid: GridEntity, x: Float, y: Float) : En
             val colThis   = eg.getGridCoordFromWorld1D(pos.x)
             val rowThis   = eg.getGridCoordFromWorld1D(pos.y)
             val dir = if (pp.x >= pos.x) 1 else -1
-            if (eg.scanHorizontal(rowThis, rowThis, colThis, colPlayer)) {
-                state = dir
-                sim.playSoundEntity("guard_chase")
-                break
+            if (!eg.scanHorizontal(rowThis, rowThis, colThis, colPlayer)) continue
+            // Mirror the move() wall/edge check: only trigger if the guard can actually
+            // take at least one step. Prevents looping sound when stuck against a wall —
+            // move() resets state=0 on collision, think() would otherwise re-trigger
+            // immediately on the next tick while the guard is still blocked.
+            val halfSize = r + margin
+            val nextX    = pos.x + dir * speed
+            val colEdge  = eg.getGridCoordFromWorld1D(pos.x + dir * halfSize)
+            val colEdgeN = eg.getGridCoordFromWorld1D(nextX  + dir * halfSize)
+            if (colEdge != colEdgeN) {
+                val row = eg.getGridCoordFromWorld1D(pos.y)
+                if (!eg.isEmpty(colEdge, row, dir, 0) || !eg.isSolidIgnoreDoors(colEdgeN, row, 0, 1))
+                    continue  // still blocked — don't trigger or play sound
             }
+            state = dir
+            sim.playSoundEntity("guard_chase")
+            break
         }
     }
 
@@ -262,7 +274,7 @@ class TurretEntity(x: Float, y: Float) : EntityBase() {
                                         pos.x + proj*nx, pos.y + proj*ny, nx*8f, ny*8f)
                                 }
                             }
-                            sim.spawnTurretBullet(pos.x, pos.y, hitPos.x, hitPos.y)
+                            sim.spawnTurretBullet(pos.x, pos.y, hitPos.x, hitPos.y, hitN.x, hitN.y)
                         }
                         shotTimer = 0f; curState = 3
                     }

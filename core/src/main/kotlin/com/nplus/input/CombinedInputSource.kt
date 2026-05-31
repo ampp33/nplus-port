@@ -18,7 +18,8 @@ class CombinedInputSource(private val sources: List<InputProvider>) : InputProvi
             left  = states.any { it.left },
             right = states.any { it.right },
             jump  = states.any { it.jump },
-            pause = states.any { it.pause }
+            pause = states.any { it.pause },
+            quit  = states.any { it.quit }
         )
         return lastState
     }

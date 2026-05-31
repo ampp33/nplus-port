@@ -64,15 +64,14 @@ class GameRenderer : Disposable {
         private const val TURRET_PREFIRE_CHARGE_END   = 8
         private const val TURRET_POSTFIRE_FRAME       = 9
 
-        // Timer bar (drawn just above the level interior at y = WORLD_H)
+        // Horizontal timer bar drawn inside the top tile border of the level.
         // Original TimeBar sprite is 625×12 px, so BAR_H = 12 world units.
         private const val BAR_H = 12f
-        // Vertical padding (world units) added above and below the content block (level + timer bar)
-        // so the level fills the screen with a small breathing margin instead of large gray borders.
-        private const val VIEWPORT_PAD_V = 16f
-        // BAR_NORMAL_W = bar width at fraction 1.0 (current == starting ticks).
-        // Matches the original timebar sprite proportion: 624 px of content on a ~800 px stage ≈ 78%.
-        // Leaving ~22% of WORLD_W on the right so gold overflow can extend the fill visually.
+        // Game area fills the full screen height; the level's own tile border provides
+        // visual space for the timer bar (top) and level label (bottom).
+        private const val GAME_PAD = 0f
+        // BAR_NORMAL_W = bar fill width at fraction 1.0 (current == starting ticks).
+        // Matches original timebar sprite proportion (~78% of world width).
         private val BAR_NORMAL_W = WORLD_W * 0.78f   // ≈ 617 units; gold extends beyond this
 
         // Overlay modal
@@ -113,10 +112,21 @@ class GameRenderer : Disposable {
     }
 
     private val camera   = OrthographicCamera()
-    private val viewport = ExtendViewport(WORLD_W, WORLD_H + BAR_H + VIEWPORT_PAD_V, camera)
+    private val viewport = ExtendViewport(WORLD_W + 2 * GAME_PAD, WORLD_H + 2 * GAME_PAD, camera)
     private val shape    = ShapeRenderer()
     private val batch    = SpriteBatch()
     private var stateTime = 0f
+
+    // Size of one screen pixel in world units; updated each resize so HUD offsets stay
+    // accurate in pixels regardless of screen resolution.
+    private var unitsPerPx = WORLD_H / 1080f
+
+    // Active turret shot lines: each fades from opaque to transparent over TURRET_SHOT_DURATION.
+    // Mirrors AS3 HACKY_drawtimer (10 sim ticks) converted to real time.
+    private data class TurretShot(val x0: Float, val y0: Float, val x1: Float, val y1: Float,
+                                  val hnx: Float, val hny: Float, var elapsed: Float = 0f)
+    private val turretShots = mutableListOf<TurretShot>()
+    private val TURRET_SHOT_DURATION = 10f / SimGlobals.SIM_RATE  // 10 sim ticks → seconds
 
     // Gold collection animations: entity → stateTime when it was first seen as collected.
     // Drives one-shot playback of frames 4–17 (the rising sparkle).
@@ -186,8 +196,8 @@ class GameRenderer : Disposable {
     private val glyphLayout = GlyphLayout()
 
     init {
-        camera.setToOrtho(false, WORLD_W, WORLD_H + BAR_H + VIEWPORT_PAD_V)
-        camera.position.set(WORLD_W / 2f, (WORLD_H + BAR_H) / 2f, 0f)
+        camera.setToOrtho(false, WORLD_W + 2 * GAME_PAD, WORLD_H + 2 * GAME_PAD)
+        camera.position.set(WORLD_W / 2f, WORLD_H / 2f, 0f)
         camera.update()
         loadSprites()
     }
@@ -253,8 +263,9 @@ class GameRenderer : Disposable {
 
     fun resize(width: Int, height: Int) {
         viewport.update(width, height, false)
-        camera.position.set(WORLD_W / 2f, (WORLD_H + BAR_H) / 2f, 0f)
+        camera.position.set(WORLD_W / 2f, WORLD_H / 2f, 0f)
         camera.update()
+        unitsPerPx = WORLD_H / height.toFloat()
     }
 
     fun render(
@@ -329,13 +340,16 @@ class GameRenderer : Disposable {
         tickAndDrawEffects(dt)
         batch.end()
 
-        // Pass 5: timer bar (always visible, drawn above the level interior).
+        // Pass 5: fading turret shot lines (white, 10-sim-tick fade)
+        if (turretShots.isNotEmpty()) drawTurretShots(dt)
+
+        // Pass 6: timer bar (always visible, drawn above the level interior).
         drawTimerBar(currentTicks, startingTicks)
 
-        // Pass 6: level label in bottom-left corner of the level area.
+        // Pass 7: level label in bottom-left corner of the level area.
         if (levelLabel.isNotEmpty()) drawLevelLabel(levelLabel)
 
-        // Pass 7: dim overlay + prompt text for non-GAME states.
+        // Pass 8: dim overlay + prompt text for non-GAME states.
         if (playState != PlayState.GAME) drawOverlay(playState)
     }
 
@@ -347,23 +361,25 @@ class GameRenderer : Disposable {
         // Unclamped fraction so gold overflow (fraction > 1.0) is visible
         val fraction = if (startingTicks > 0) currentTicks.toFloat() / startingTicks.toFloat() else 0f
 
-        // Reserve space on the left for the timer number. Measure the widest possible
-        // text ("0000.000") once to get a stable, non-shifting bar start position.
+        // Reserve space on the left for the timer number.
         glyphLayout.setText(timerFont, "0000.000")
         val numAreaW = glyphLayout.width + 8f   // 8 units gap between number and bar
 
-        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends to right edge
+        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends to right edge.
         val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W - numAreaW)
 
+        // Bar sits 10 px below the top of the window, inside the level's gray top tile border.
+        val topPad = 10f * unitsPerPx
+        val barY   = WORLD_H - BAR_H - topPad
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = barFillColor(fraction)
-        if (fillW > 0f) shape.rect(numAreaW, WORLD_H, fillW, BAR_H)
+        if (fillW > 0f) shape.rect(numAreaW, barY, fillW, BAR_H)
         shape.end()
 
-        // Timer number: left-aligned, to the left of the bar
+        // Timer number: left-aligned, vertically centred in the bar strip
         val text = formatTimer(currentTicks)
-        val ty = WORLD_H + BAR_H / 2f + timerFont.capHeight / 2f
+        val ty = barY + BAR_H / 2f + timerFont.capHeight / 2f
         batch.projectionMatrix = camera.combined
         batch.begin()
         timerFont.color = COL_TIMER_TEXT
@@ -372,11 +388,14 @@ class GameRenderer : Disposable {
     }
 
     private fun drawLevelLabel(label: String) {
-        val ty = timerFont.capHeight + 4f   // small margin above y=0
+        // Level name: 10 px from the left and 10 px from the bottom of the window.
+        val pad = 20f * unitsPerPx
+        val tx  = pad
+        val ty  = pad + timerFont.capHeight
         batch.projectionMatrix = camera.combined
         batch.begin()
         timerFont.color = COL_MODAL_TEXT
-        timerFont.draw(batch, label, 4f, ty)
+        timerFont.draw(batch, label, tx, ty)
         batch.end()
     }
 
@@ -1066,9 +1085,35 @@ class GameRenderer : Disposable {
                             originX = 0f, originY = sh*nh/2f)
                     }
                 }
+                is Simulator.SpawnEvent.TurretBullet -> {
+                    turretShots += TurretShot(e.x0, e.y0, e.x1, e.y1, e.hnx, e.hny)
+                }
             }
         }
         sim.pendingSpawns.clear()
+    }
+
+    private fun drawTurretShots(dt: Float) {
+        Gdx.gl.glEnable(GL20.GL_BLEND)
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+        Gdx.gl.glLineWidth(4f)
+        shape.projectionMatrix = camera.combined
+        shape.begin(ShapeType.Line)
+        val iter = turretShots.iterator()
+        while (iter.hasNext()) {
+            val s = iter.next()
+            s.elapsed += dt
+            if (s.elapsed >= TURRET_SHOT_DURATION) { iter.remove(); continue }
+            val alpha = 1f - s.elapsed / TURRET_SHOT_DURATION
+            shape.color = Color(0.4f, 0.4f, 0.4f, alpha)
+            shape.line(s.x0, fy(s.y0), s.x1, fy(s.y1))
+            if (s.hnx != 0f || s.hny != 0f) {
+                shape.line(s.x1, fy(s.y1),
+                           s.x1 + 4f * s.hnx, fy(s.y1 + 4f * s.hny))
+            }
+        }
+        shape.end()
+        Gdx.gl.glLineWidth(1f)
     }
 
 }
