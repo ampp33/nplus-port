@@ -124,7 +124,7 @@ class GameScreen(
                 }
                 // R in pre-game: restart (resets to same startingTicks)
                 if (nowR && !prevR) {
-                    appState.levelFailed(episode, level, startingTicks); return
+                    audio.reset(); loadLevel(); return
                 }
             }
 
@@ -142,7 +142,7 @@ class GameScreen(
 
                 // R → instant restart
                 if (nowR && !prevR) {
-                    appState.levelFailed(episode, level, startingTicks); return
+                    audio.reset(); loadLevel(); return
                 }
 
                 // Fixed-step physics + timer
@@ -224,7 +224,7 @@ class GameScreen(
                 } else {
                     // Jump → retry same level with the timer value it had at level start
                     if (nowJump && !prevJump) {
-                        appState.levelFailed(episode, level, startingTicks); return
+                        audio.reset(); loadLevel(); return
                     }
                     // ESC or X → quit to menu
                     if ((nowPause && !prevPause) || (nowQuit && !prevQuit)) { appState.goToMenu(); return }

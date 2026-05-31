@@ -268,6 +268,7 @@ class GameRenderer : Disposable {
         unitsPerPx = WORLD_H / height.toFloat()
     }
 
+
     fun render(
         sim:           Simulator,
         playState:     PlayState = PlayState.GAME,
@@ -307,8 +308,20 @@ class GameRenderer : Disposable {
         drawEntitySprites(sim.entityList())
         batch.end()
 
-        // Pass 2: FULL (type-1) solid walls — drawn after entities so entity pixels
-        // that overlap into a solid tile are correctly hidden behind the wall.
+        // Pass 2: non-FULL tile sprites.
+        batch.begin()
+        drawTiles(sim.tileGrid)
+        batch.end()
+
+        // Pass 3: living ninja.
+        batch.begin()
+        batch.setShader(ninjaShader)
+        drawNinjaSprites(sim.players, ninjaColor)
+        batch.setShader(null)
+        batch.setColor(Color.WHITE)
+        batch.end()
+
+        // Pass 4: FULL (type-1) solid walls.
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
         shape.color = COL_BG
@@ -320,15 +333,6 @@ class GameRenderer : Disposable {
             shape.rect(col * cs - E, fy((row + 1) * cs) - E, cs + 2 * E, cs + 2 * E)
         }
         shape.end()
-
-        // Pass 3: non-FULL tile sprites + living ninja — on top of everything.
-        batch.begin()
-        drawTiles(sim.tileGrid)
-        batch.setShader(ninjaShader)
-        drawNinjaSprites(sim.players, ninjaColor)
-        batch.setShader(null)
-        batch.setColor(Color.WHITE)
-        batch.end()
 
         // Pass 4: dead ninja ragdoll (color-replacement shader) + sprite effects.
         batch.projectionMatrix = camera.combined
@@ -369,7 +373,7 @@ class GameRenderer : Disposable {
         val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W - numAreaW)
 
         // Bar sits 10 px below the top of the window, inside the level's gray top tile border.
-        val topPad = 10f * unitsPerPx
+        val topPad = 7f * unitsPerPx
         val barY   = WORLD_H - BAR_H - topPad
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Filled)
@@ -379,17 +383,18 @@ class GameRenderer : Disposable {
 
         // Timer number: left-aligned, vertically centred in the bar strip
         val text = formatTimer(currentTicks)
-        val ty = barY + BAR_H / 2f + timerFont.capHeight / 2f
+        val rawTy = barY + BAR_H / 2f + timerFont.capHeight / 2f
+        val ty = ceil(rawTy / unitsPerPx) * unitsPerPx
         batch.projectionMatrix = camera.combined
         batch.begin()
         timerFont.color = COL_TIMER_TEXT
-        timerFont.draw(batch, text, 4f, ty)
+        timerFont.draw(batch, text, 4f, ty + 1f)
         batch.end()
     }
 
     private fun drawLevelLabel(label: String) {
         // Level name: 10 px from the left and 10 px from the bottom of the window.
-        val pad = 20f * unitsPerPx
+        val pad = 12f * unitsPerPx
         val tx  = pad
         val ty  = pad + timerFont.capHeight
         batch.projectionMatrix = camera.combined
@@ -399,7 +404,8 @@ class GameRenderer : Disposable {
         batch.end()
     }
 
-    /**
+    /**        val ty = barY + BAR_H / 2f + timerFont.capHeight / 2f
+
      * Color matches the original TimeBar MovieClip gradient (reverse-engineered from sprite frames).
      *
      * Frames 1–502 (fraction 0→1): bar grows, color: dark-red → magenta → dark-blue
@@ -799,7 +805,15 @@ class GameRenderer : Disposable {
             val reg = selectNinjaFrame(ninja, state) ?: continue
             val ornDeg = -Math.toDegrees(state.orientation.toDouble()).toFloat()
             // Wall-slide: sprite body extends 4.4 units past physics radius — shift toward normal
-            val xOff = if (state.state == Ninja.State.WALL_SLIDING) state.wallNormalX * 4.4f else 0f
+            // In-air frames extend up to 13 world units from centre (physics radius = 10),
+            // so shift the sprite 3 units away from any wall the ninja is touching to keep
+            // limbs inside the physics boundary.  Wall-slide uses 4.4 for the same reason.
+            val xOff = when (state.state) {
+                Ninja.State.WALL_SLIDING -> state.wallNormalX * 4.4f
+                Ninja.State.JUMPING, Ninja.State.FALLING, Ninja.State.AWAITING_DEATH ->
+                    if (state.wallNormalX != 0f) state.wallNormalX * 3f else 0f
+                else -> 0f
+            }
             drawNinjaTex(reg, state.posX + xOff, state.posY, state.facing, ornDeg)
         }
     }
@@ -1096,7 +1110,7 @@ class GameRenderer : Disposable {
     private fun drawTurretShots(dt: Float) {
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
-        Gdx.gl.glLineWidth(4f)
+        Gdx.gl.glLineWidth(3f)
         shape.projectionMatrix = camera.combined
         shape.begin(ShapeType.Line)
         val iter = turretShots.iterator()

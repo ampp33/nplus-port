@@ -115,6 +115,13 @@ class LibGdxAudioManager : AudioManager {
         assets.finishLoading()
     }
 
+    /** Stop any in-flight sounds and clear transient state without releasing assets. */
+    fun reset() {
+        activeLoops.keys.toList().forEach { stopLoopSound(it) }
+        pausedLoops = emptySet()
+        goldTriggered = false
+    }
+
     override fun dispose() {
         activeLoops.keys.toList().forEach { stopLoopSound(it) }
         currentMusic?.stop()
