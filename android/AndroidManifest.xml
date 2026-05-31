@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="N+"
+        android:label="n"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
 
         <activity

@@ -6,7 +6,7 @@ import com.nplus.NPlusGame
 
 fun main() {
     val config = Lwjgl3ApplicationConfiguration().apply {
-        setTitle("N+")
+        setTitle("n")
         setWindowedMode(2560, 1440)
         setForegroundFPS(144)
         useVsync(true)

@@ -38,7 +38,7 @@ import com.badlogic.gdx.utils.viewport.ExtendViewport
  * fontSm (8 px)  — hint lines, "select episode", small labels
  * fontMd (16 px) — "play game" header, episode cell labels
  * fontLg (20 px) — main menu items
- * fontXl (32 px) — title "N+"
+ * fontXl (32 px) — title "n"
  */
 class MenuScreen(private val appState: AppStateManager,
                  startAtGrid: Boolean = false,
@@ -124,7 +124,7 @@ class MenuScreen(private val appState: AppStateManager,
         fontSm = makeFont("fonts/uni05_8.ttf", 8)
         fontMd = makeFont("fonts/uni05_16.ttf", 16)
         fontLg = makeFont("fonts/uni05_20.ttf", 20)
-        fontXl = makeFont("fonts/uni05_32.ttf", 128)
+        fontXl = makeFont("fonts/uni05_32.ttf", 256)
 
         // Load tile atlas with linear filter for smooth level preview downscaling
         tileAtlas = TextureAtlas(Gdx.files.internal("atlas/sprites.atlas"))
@@ -341,7 +341,7 @@ class MenuScreen(private val appState: AppStateManager,
         // Title
         batch.begin()
         fontXl.color = COL_TEXT_DARK
-        drawTextCentred(fontXl, "n+", centreX, 545f)
+        drawTextCentred(fontXl, "n", centreX, 545f)
         batch.end()
 
         // Item rows
@@ -380,11 +380,11 @@ class MenuScreen(private val appState: AppStateManager,
 
         batch.begin()
         fontXl.color = COL_TEXT_DARK
-        drawTextCentred(fontXl, "n+", centreX, 545f)
+        drawTextCentred(fontXl, "n", centreX, 545f)
         fontLg.color = COL_TEXT_DARK
-        drawTextCentred(fontLg, "Start a new game?", centreX, 380f)
+        drawTextCentred(fontLg, "Start a new game?", centreX, 350f)
         fontMd.color = COL_TEXT_DIM
-        drawTextCentred(fontMd, "This will erase all progress.", centreX, 348f)
+        drawTextCentred(fontMd, "This will erase all progress.", centreX, 320f)
         batch.end()
 
         layout.setText(fontLg, "Yes, start over")
