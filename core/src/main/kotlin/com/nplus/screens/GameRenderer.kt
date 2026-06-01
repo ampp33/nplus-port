@@ -453,7 +453,7 @@ class GameRenderer : Disposable {
             else                -> return
         }
         val line2 = when (playState) {
-            PlayState.PAUSED -> "PRESS JUMP TO CONTINUE, OR Q TO QUIT"
+            PlayState.PAUSED -> "PRESS JUMP TO CONTINUE, OR ${com.nplus.Platform.quit} TO QUIT"
             else             -> null
         }
 

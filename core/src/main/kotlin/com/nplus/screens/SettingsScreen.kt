@@ -49,6 +49,8 @@ class SettingsScreen(private val appState: AppStateManager) : Screen {
     private var prevGpBack    = false
 
     override fun show() {
+        appState.menuBackground.show()   // idempotent: only initializes GL resources once
+
         camera.setToOrtho(false, 792f, 600f)
         camera.update()
         fontSm = makeFont("fonts/uni05_8.ttf",  8)
@@ -73,24 +75,27 @@ class SettingsScreen(private val appState: AppStateManager) : Screen {
     override fun render(delta: Float) {
         handleInput()
 
-        Gdx.gl.glClearColor(COL_BG.r, COL_BG.g, COL_BG.b, 1f)
-        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
+        // Render attract-mode game in background (clears screen internally)
+        appState.menuBackground.render(delta)
+
+        // Re-assert menu viewport over the game render
         Gdx.gl.glEnable(GL20.GL_BLEND)
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
-
         viewport.apply()
         shape.projectionMatrix = camera.combined
         batch.projectionMatrix = camera.combined
 
+        // Translucent wash so menu items are readable over the game background
         shape.begin(ShapeRenderer.ShapeType.Filled)
-        shape.color = COL_BG
-        shape.rect(8f, 8f, 776f, 584f)
+        shape.setColor(COL_BG.r, COL_BG.g, COL_BG.b, 0.60f)
+        shape.rect(0f, 0f, 792f, 600f)
         shape.end()
 
         drawSettings()
     }
 
     override fun resize(width: Int, height: Int) {
+        appState.menuBackground.resize(width, height)
         viewport.update(width, height, false)
         camera.position.set(396f, 300f, 0f)
         camera.update()
@@ -118,7 +123,8 @@ class SettingsScreen(private val appState: AppStateManager) : Screen {
         val gpLeft    = pad?.getButton(m?.buttonDpadLeft  ?: -1) == true
         val gpRight   = pad?.getButton(m?.buttonDpadRight ?: -1) == true
         val gpConfirm = pad?.getButton(m?.buttonA         ?: -1) == true
-        val gpBack    = pad?.getButton(m?.buttonB         ?: -1) == true
+        val gpBackBtn = if (com.nplus.Platform.isRetroid) m?.buttonX else m?.buttonB
+        val gpBack    = pad?.getButton(gpBackBtn ?: -1) == true
 
         val left    = kLeft    || (gpLeft    && !prevGpLeft)
         val right   = kRight   || (gpRight   && !prevGpRight)
@@ -151,7 +157,7 @@ class SettingsScreen(private val appState: AppStateManager) : Screen {
 
         batch.begin()
         fontMd.color = COL_TEXT_DIM
-        drawTextCentred(fontMd, "Enter select   Esc back", 396f, 28f)
+        drawTextCentred(fontMd, "${com.nplus.Platform.confirm} select   ${com.nplus.Platform.back} back", 396f, 28f)
         batch.end()
     }
 
@@ -218,11 +224,17 @@ class SettingsScreen(private val appState: AppStateManager) : Screen {
         val firstRowY = headerY - 30f
         val rowH = 20f
 
+        val p = com.nplus.Platform
         batch.begin()
         fontMd.color = COL_TEXT_DARK
-        drawTextCentred(fontMd, "CONTROLS (KEYBOARD)", 396f, headerY)
+        drawTextCentred(fontMd, if (p.isRetroid) "CONTROLS (GAMEPAD)" else "CONTROLS (KEYBOARD)", 396f, headerY)
 
-        val bindings = listOf(
+        val bindings = if (p.isRetroid) listOf(
+            "Move"        to "D-pad L / R",
+            "Jump"        to "A",
+            "Pause"       to "Y",
+            "Quit level"  to "X  (while paused)",
+        ) else listOf(
             "Move"        to "Left / Right",
             "Jump"        to "Z / Space",
             "Pause"       to "P / Esc",

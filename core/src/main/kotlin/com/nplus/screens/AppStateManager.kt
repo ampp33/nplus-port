@@ -3,6 +3,7 @@ package com.nplus.screens
 import com.badlogic.gdx.Gdx
 import com.nplus.NPlusGame
 import com.nplus.SimGlobals
+import com.nplus.attract.AttractModeBackground
 import com.nplus.levels.LevelData
 import com.nplus.levels.LevelParser
 
@@ -28,6 +29,10 @@ class AppStateManager(private val game: NPlusGame) {
     // --- Player progress (save/load) ---
     val progress = ProgressManager()
 
+    // --- Shared menu background (lives for the app lifetime; screens borrow it) ---
+    lateinit var menuBackground: AttractModeBackground
+        private set
+
     // --- Current state ---
     var state: AppState = AppState.MainMenu
         private set
@@ -43,13 +48,15 @@ class AppStateManager(private val game: NPlusGame) {
         maxEpisode = levelMap.keys.maxOfOrNull { it.first } ?: 0
         Gdx.app.log("AppStateManager", "${levelMap.size} levels loaded, maxEpisode=$maxEpisode")
         progress.load()
+        menuBackground = AttractModeBackground(levelMap)  // GL init deferred to first show()
     }
 
     // -----------------------------------------------------------------------
     // Navigation API (called by screens)
     // -----------------------------------------------------------------------
 
-    fun goToMenu() = transition(AppState.MainMenu)
+    fun goToMenu()        = transition(AppState.MainMenu)
+    fun goToAttractMode() = transition(AppState.AttractMode)
 
     fun goToSettings() = transition(AppState.Settings)
 
@@ -123,14 +130,19 @@ class AppStateManager(private val game: NPlusGame) {
     // Internal
     // -----------------------------------------------------------------------
 
+    fun dispose() {
+        if (::menuBackground.isInitialized) menuBackground.dispose()
+    }
+
     private fun transition(newState: AppState) {
         Gdx.app.log("AppStateManager", "$state → $newState")
         state = newState
         game.setScreen(
             when (newState) {
-                is AppState.MainMenu -> MenuScreen(this)
-                is AppState.Playing  -> GameScreen(this, newState.episode, newState.level, newState.startingTicks)
-                is AppState.Settings -> SettingsScreen(this)
+                is AppState.MainMenu   -> MenuScreen(this)
+                is AppState.Playing    -> GameScreen(this, newState.episode, newState.level, newState.startingTicks)
+                is AppState.Settings   -> SettingsScreen(this)
+                is AppState.AttractMode -> AttractModeScreen(this)
             }
         )
     }

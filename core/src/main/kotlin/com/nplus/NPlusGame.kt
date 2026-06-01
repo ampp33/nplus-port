@@ -17,5 +17,6 @@ class NPlusGame : Game() {
 
     override fun dispose() {
         screen?.dispose()
+        appState.dispose()
     }
 }

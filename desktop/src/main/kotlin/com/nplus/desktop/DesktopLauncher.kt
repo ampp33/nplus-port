@@ -11,6 +11,7 @@ fun main() {
         setForegroundFPS(144)
         useVsync(true)
         setResizable(false)
+        setWindowIcon("icon16.png", "icon32.png", "icon128.png")
     }
     Lwjgl3Application(NPlusGame(), config)
 }

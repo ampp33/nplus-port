@@ -25,4 +25,7 @@ sealed class AppState {
 
     /** Settings screen (controls display, ninja colour picker). */
     object Settings : AppState()
+
+    /** Full-screen attract mode: cycles pre-recorded replays until any input. */
+    object AttractMode : AppState()
 }
