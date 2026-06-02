@@ -12,6 +12,13 @@ class CombinedInputSource(private val sources: List<InputProvider>) : InputProvi
     override var lastState: InputState = InputState.EMPTY
         private set
 
+    private var jumpSuppressed = false
+
+    /** Suppress jump input until the physical button is released (prevents a start/retry press from registering as a game jump). */
+    fun suppressJump() { jumpSuppressed = true }
+
+    override val isJumpDown: Boolean get() = if (jumpSuppressed) false else lastState.jump
+
     override fun poll(): InputState {
         val states = sources.map { it.poll() }
         lastState = InputState(
@@ -21,6 +28,7 @@ class CombinedInputSource(private val sources: List<InputProvider>) : InputProvi
             pause = states.any { it.pause },
             quit  = states.any { it.quit }
         )
+        if (jumpSuppressed && !lastState.jump) jumpSuppressed = false
         return lastState
     }
 

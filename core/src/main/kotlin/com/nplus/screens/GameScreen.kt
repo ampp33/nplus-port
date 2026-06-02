@@ -86,6 +86,7 @@ class GameScreen(
     private var prevQ      = false
     private var prevR      = false
     private var prevQuit   = false
+    private var prevL      = false   // L = toggle wall-jump debug logging
 
     // -----------------------------------------------------------------------
     // Screen lifecycle
@@ -109,6 +110,7 @@ class GameScreen(
         val nowQ     = Gdx.input.isKeyPressed(Input.Keys.Q)
         val nowR     = Gdx.input.isKeyPressed(Input.Keys.R)
         val nowP     = Gdx.input.isKeyPressed(Input.Keys.P)
+        val nowL     = Gdx.input.isKeyPressed(Input.Keys.L)
         val nowQuit  = inp.quit  // X button: pause in-game, quit when already paused
 
         when (playState) {
@@ -116,6 +118,7 @@ class GameScreen(
             PlayState.PRE_GAME -> {
                 audio.tick()
                 if (nowJump && !prevJump) {
+                    inputSrc.suppressJump()
                     playState = PlayState.GAME
                 }
                 if ((nowPause && !prevPause) || (nowQuit && !prevQuit)) {
@@ -139,6 +142,12 @@ class GameScreen(
 
                 // K → suicide (kills ninja immediately)
                 if (nowK && !prevK) currentSim.appSuicide(0)
+
+                // L → toggle wall-jump debug logging (prints to stdout)
+                if (nowL && !prevL) {
+                    com.nplus.physics.Ninja.WALL_JUMP_DEBUG = !com.nplus.physics.Ninja.WALL_JUMP_DEBUG
+                    println("[DEBUG] Wall-jump logging ${if (com.nplus.physics.Ninja.WALL_JUMP_DEBUG) "ON" else "OFF"}")
+                }
 
                 // R → instant restart
                 if (nowR && !prevR) {
@@ -239,6 +248,7 @@ class GameScreen(
         prevQ     = nowQ
         prevR     = nowR
         prevQuit  = nowQuit
+        prevL     = nowL
 
         renderer.render(currentSim, playState, currentTicks, startingTicks, levelLabel,
                         appState.progress.getNinjaColor())
@@ -298,6 +308,6 @@ class GameScreen(
         playState         = PlayState.PRE_GAME
         postGameCooldown  = 0
         celebElapsed      = 0f
-        prevJump = false; prevPause = false; prevP = false; prevK = false; prevQ = false; prevR = false; prevQuit = false
+        prevJump = false; prevPause = false; prevP = false; prevK = false; prevQ = false; prevR = false; prevQuit = false; prevL = false
     }
 }

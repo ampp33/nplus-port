@@ -821,7 +821,7 @@ class GameRenderer : Disposable {
     private fun drawNinjaTex(reg: TextureRegion, px: Float, py: Float, facing: Float, ornDeg: Float) {
         // Ninja frames are 1x (187×140 px), always downscaled to ~37×28 game units. No SPRITE_SCALE.
         val w = reg.regionWidth * 0.2f; val h = reg.regionHeight * 0.2f
-        val ox = w / 2f; val oy = h / 2f - 2f
+        val ox = w / 2f; val oy = h / 2f - 2.9f
         batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, facing, 1f, ornDeg)
     }
 

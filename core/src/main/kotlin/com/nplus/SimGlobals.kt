@@ -3,8 +3,12 @@ package com.nplus
 /** Port of AS3 sim_globals. All constants copied verbatim. */
 object SimGlobals {
 
-    /** Physics tick rate (steps per second). Original N+ App_MultiPurpose sets sim_rate=60. */
-    const val SIM_RATE: Float = 60f
+    /** Physics tick rate (steps per second). Original N+ App_MultiPurpose sets sim_rate=60.
+     *  Running at 120 so each tick is 8.3 ms: airAccel per tick halves, the ninja drifts
+     *  from a wall 4× more slowly, keeping nearWall true for ~4 ticks (~33 ms) after releasing
+     *  wall-slide — matching the original Flash 30 fps display / 60 fps sim window where both
+     *  direction-away and jump presses landed on the same sim tick. */
+    const val SIM_RATE: Float = 120f
 
     const val DEATHTYPE_SUICIDE   = 0
     const val DEATHTYPE_FALL      = 1

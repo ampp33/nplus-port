@@ -28,6 +28,11 @@ class Ninja(
     /** Callback to start/stop looping ambient sounds ("wallslide", "skid"). No-op by default. */
     private val onLoopSound: (name: String, active: Boolean) -> Unit = { _, _ -> }
 ) {
+    companion object {
+        /** Prints a line every time jump is pressed in the air. Toggle with L key in-game. */
+        var WALL_JUMP_DEBUG = true
+    }
+
     // --- State enum ---
 
     enum class State {
@@ -77,18 +82,24 @@ class Ninja(
     private var lastFacing = 1f  // sticky: holds last vel.x direction, never resets (matches AS3)
 
     // Jump
-    private var jumpTimer  = 0f
+    private var jumpTimer   = 0f
     private var wasJumpDown = false
-    // Pressing jump just before touching a wall is common; buffer the tap so it fires when nearWall
-    // becomes true within the window. 6 ticks ≈ 100 ms at 60 Hz — typical platformer feel margin.
-    private var jumpBuffer = 0
+    // Pre-contact buffer: set to 6 on any fresh jump tap; wall jump can fire while > 0.
+    // Reset to 0 inside actionJump() so a floor/wall jump immediately consumes it — the old
+    // bug (floor-jump buffer bleeding into an accidental wall jump) cannot happen.
+    private var jumpBuffer  = 0
 
     // Contact state (updated each tick in postCollision)
-    private var inAir    = true
-    private var wasInAir = false
-    private var nearWall = false
+    private var inAir      = true
+    private var wasInAir   = false
+    private var nearWall   = false
+    private var wasNearWall = false  // nearWall from previous tick, for coyote transition detection
     private val wallNormal  = Vec2()
     private val floorNormal = Vec2(0f, -1f)
+    // Coyote timer: allows wall jump for 2 ticks after leaving WALL_SLIDING.
+    // wallNormal retains its value after nearWall→false, so no extra direction save needed.
+    // 2 ticks ≈ 33 ms matches the original Flash 30fps display frame window.
+    private var wallSlideCoyote = 0
 
     // Floor contact accumulator (reset in preCollision, incremented in respondToCollision)
     private var floorCount = 1
@@ -302,6 +313,22 @@ class Ninja(
         val jumpTap  = jumpHeld && !wasJumpDown
         wasJumpDown  = jumpHeld
         if (jumpTap) jumpBuffer = 6 else if (jumpBuffer > 0) jumpBuffer--
+        // Auto-set coyote whenever the ninja just lost wall contact while FALLING.
+        // Covers pressing away from wall without entering WALL_SLIDING (e.g. pressing away
+        // while falling slowly), which the explicit WALL_SLIDING exit never catches.
+        if (wasNearWall && !nearWall && inAir && state == State.FALLING) {
+            wallSlideCoyote = maxOf(wallSlideCoyote, 4)
+        }
+        wasNearWall = nearWall
+        if (wallSlideCoyote > 0) wallSlideCoyote--
+
+        // --- Wall-jump debug logging (set WALL_JUMP_DEBUG=true to enable) ---
+        if (WALL_JUMP_DEBUG && jumpTap && inAir) {
+            val dir0 = (if (right) 1 else 0) - (if (left) 1 else 0)
+            println("[WJ f=$frame] jumpTap=true  state=$state  inAir=$inAir" +
+                "  nearWall=$nearWall  coyote=$wallSlideCoyote  buf=$jumpBuffer" +
+                "  wallNx=%.3f  dir=$dir0  vel=(%.2f,%.2f)".format(wallNormal.x, vel.x, vel.y))
+        }
 
         if (state == State.DISABLED || state == State.DEAD) return
 
@@ -346,16 +373,20 @@ class Ninja(
                 return
             }
 
-            // FALLING or WALL_SLIDING — check wall interactions
-            if (nearWall) {
-                if (jumpBuffer > 0) {
-                    jumpBuffer = 0
+            // FALLING or WALL_SLIDING — check wall interactions.
+            // wallSlideCoyote lets a wall jump fire for 2 ticks after the player presses away
+            // from a wall: the ninja drifts slightly past the nearWall threshold (r+0.1) but
+            // wallNormal retains the correct direction. 2 ticks ≈ 33 ms matches the original
+            // Flash 30 fps display window where both inputs landed on the same sim tick.
+            if (nearWall || wallSlideCoyote > 0) {
+                if (jumpTap || jumpBuffer > 0) {
                     val wallMult: Float; val wallBias: Float
                     if (state == State.WALL_SLIDING && dir * wallNormal.x < 0) {
                         wallMult = 1f; wallBias = 0.5f
                     } else {
                         wallMult = 1.5f; wallBias = 0.7f
                     }
+                    if (WALL_JUMP_DEBUG) println("[WJ f=$frame] FIRED  mult=$wallMult  bias=$wallBias  via=${if (nearWall) "nearWall" else "coyote"}")
                     sim.spawnJumpDust(pos.x - wallNormal.x * r,
                                       pos.y - wallNormal.y * r,
                                       wallNormal.x * 90f)
@@ -363,7 +394,10 @@ class Ninja(
                     return
                 }
                 if (state == State.WALL_SLIDING) {
-                    if (dir * wallNormal.x > 0) { actionFall(); return }
+                    if (dir * wallNormal.x > 0) {
+                        if (WALL_JUMP_DEBUG) println("[WJ f=$frame] coyote armed (pressed away from wall)")
+                        wallSlideCoyote = 4; actionFall(); return
+                    }
                     // pressing into wall — wall friction
                     sim.spawnWallDust(pos, r, wallNormal, min(4f, abs(vy)))
                     vel.y *= wallFriction
@@ -498,6 +532,7 @@ class Ninja(
     // --- Private state transitions ---
 
     private fun actionJump(nx: Float, ny: Float, sim: Simulator) {
+        jumpBuffer = 0  // consume buffer so this jump can't trigger a second wall jump
         exitCurrentState()
         state = State.JUMPING
         g = jumpGrav
