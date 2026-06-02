@@ -8,17 +8,13 @@ permissions:
   contents: write
 
 jobs:
-  # ── Desktop (Windows / macOS / Linux) ───────────────────────────────────────
+  # ── Desktop (Windows / macOS) ────────────────────────────────────────────────
   desktop:
     name: Desktop — ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            name: linux
-            package-type: deb
-            asset-glob: "dist/*.deb"
           - os: windows-latest
             name: windows
             package-type: exe
@@ -68,6 +64,119 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset-glob }}
+
+  # ── Linux packages (.deb / .rpm / .tar.gz / .AppImage) ──────────────────────
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Build desktop fat JAR
+        run: ./gradlew :desktop:jar
+
+      # jpackage requires a plain numeric version (e.g. 1.2.3), not "v1.2.3"
+      - name: Derive app version
+        id: ver
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          [[ "$V" =~ ^[0-9]+(\.[0-9]+)*$ ]] || V="1.0.0"
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y rpm
+          # appimagetool v13 (last stable numbered release)
+          curl -Lo /usr/local/bin/appimagetool \
+            "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
+          chmod +x /usr/local/bin/appimagetool
+
+      - name: Build .deb
+        run: |
+          jpackage \
+            --input desktop/build/libs \
+            --main-jar desktop.jar \
+            --name "nplus" \
+            --app-version "${{ steps.ver.outputs.value }}" \
+            --type deb \
+            --dest dist
+
+      - name: Build .rpm
+        run: |
+          jpackage \
+            --input desktop/build/libs \
+            --main-jar desktop.jar \
+            --name "nplus" \
+            --app-version "${{ steps.ver.outputs.value }}" \
+            --type rpm \
+            --dest dist
+
+      - name: Build app-image (shared base for tarball + AppImage)
+        run: |
+          jpackage \
+            --input desktop/build/libs \
+            --main-jar desktop.jar \
+            --name "nplus" \
+            --app-version "${{ steps.ver.outputs.value }}" \
+            --type app-image \
+            --dest dist/appimage-staging
+
+      - name: Create generic tarball
+        run: |
+          tar -czf dist/nplus-linux.tar.gz \
+            -C dist/appimage-staging nplus
+
+      - name: Build AppImage
+        run: |
+          APPDIR="$(pwd)/dist/nplus.AppDir"
+          APP_STAGE="$(pwd)/dist/appimage-staging/nplus"
+          mkdir -p "$APPDIR"
+          cp -r "$APP_STAGE/." "$APPDIR/"
+
+          cat > "$APPDIR/AppRun" << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          exec "$HERE/bin/nplus" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          cat > "$APPDIR/nplus.desktop" << 'DESKTOP'
+          [Desktop Entry]
+          Name=nplus
+          Exec=nplus
+          Icon=nplus
+          Type=Application
+          Categories=Game;
+          DESKTOP
+
+          # Use icon placed by jpackage, or generate a placeholder via ImageMagick
+          if [ -f "$APPDIR/lib/nplus.png" ]; then
+            cp "$APPDIR/lib/nplus.png" "$APPDIR/nplus.png"
+          else
+            convert -size 256x256 xc:black "$APPDIR/nplus.png"
+          fi
+
+          # APPIMAGE_EXTRACT_AND_RUN bypasses the FUSE requirement on CI runners
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+            appimagetool "$APPDIR" dist/nplus-x86_64.AppImage
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/nplus-linux.tar.gz
+            dist/nplus-x86_64.AppImage
 
   # ── Android APK ─────────────────────────────────────────────────────────────
   android:
