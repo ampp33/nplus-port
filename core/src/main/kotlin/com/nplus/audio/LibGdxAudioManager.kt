@@ -83,7 +83,10 @@ class LibGdxAudioManager : AudioManager {
             "turret_prefire" to "sounds/924.wav",
             "guard_chase"    to "sounds/953.wav",
             "drone_chase"    to "sounds/939.wav",
-            "laser_charge"   to "sounds/957.wav",
+            "laser_charge"       to "sounds/957.wav",
+            "chaingun_powerup"   to "sounds/907.wav",
+            "chaingun_fire"      to "sounds/908.wav",
+            "chaingun_powerdown" to "sounds/909.wav",
             "exit_switch"    to "sounds/973.wav",
             "door_open"      to "sounds/983.wav",  // 910.wav absent from assets — TODO
         )

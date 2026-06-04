@@ -71,8 +71,8 @@ class GameRenderer : Disposable {
         // visual space for the timer bar (top) and level label (bottom).
         private const val GAME_PAD = 0f
         // BAR_NORMAL_W = bar fill width at fraction 1.0 (current == starting ticks).
-        // Matches original timebar sprite proportion (~78% of world width).
-        private val BAR_NORMAL_W = WORLD_W * 0.78f   // ≈ 617 units; gold extends beyond this
+        // At 60 s (full time) the bar spans roughly 1/3 of the play area width.
+        private val BAR_NORMAL_W = WORLD_W / 3f   // ≈ 264 units
 
         // Overlay modal
         private val COL_MODAL_BG     = Color(0.90f, 0.90f, 0.92f, 1f)
@@ -425,19 +425,20 @@ class GameRenderer : Disposable {
      */
     private fun barFillColor(fraction: Float): Color {
         fun lf(a: Float, b: Float, t: Float) = a + (b - a) * t.coerceIn(0f, 1f)
+        // Red (low time) → reddish-purple (mid) → vivid purple (full)
         return when {
             fraction <= 0.5f -> {
                 val t = fraction / 0.5f
-                Color(136/255f, 34/255f, lf(54/255f, 136/255f, t), 1f)
+                Color(lf(200/255f, 170/255f, t), 20/255f, lf(50/255f, 120/255f, t), 1f)
             }
             fraction <= 1.0f -> {
                 val t = (fraction - 0.5f) / 0.5f
-                Color(lf(136/255f, 34/255f, t), 34/255f, 136/255f, 1f)
+                Color(lf(170/255f, 130/255f, t), 20/255f, lf(120/255f, 180/255f, t), 1f)
             }
-            fraction <= 1.5f -> Color(34/255f, 34/255f, 136/255f, 1f)   // dark blue plateau
+            fraction <= 1.5f -> Color(130/255f, 20/255f, 180/255f, 1f)  // vivid purple plateau
             else -> {
                 val t = (fraction - 1.5f) / 0.5f
-                Color(lf(34/255f, 170/255f, t), lf(34/255f, 253/255f, t), lf(136/255f, 253/255f, t), 1f)
+                Color(lf(130/255f, 170/255f, t), lf(20/255f, 253/255f, t), lf(180/255f, 253/255f, t), 1f)
             }
         }
     }
@@ -1156,6 +1157,29 @@ class GameRenderer : Disposable {
                 }
                 is Simulator.SpawnEvent.TurretBullet -> {
                     turretShots += TurretShot(e.x0, e.y0, e.x1, e.y1, e.hnx, e.hny)
+                }
+                // --- ChainBullet: muzzle flash + stretched bullet line, spawned per bullet ---
+                is Simulator.SpawnEvent.ChainBullet -> {
+                    val dx = e.x1 - e.x0; val dy = e.y1 - e.y0
+                    val dist = sqrt(dx*dx + dy*dy)
+                    val rot = -Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                    val r1 = rnd()*2f-1f; val r2 = rnd()*2f-1f
+                    // Muzzle flash: random variant, randomly scaled, placed at gun muzzle
+                    val flashVariant = if (rnd() < 0.5f) 0 else 1
+                    val flashDir = "fx_chain_flash$flashVariant"
+                    val flashFc  = if (flashVariant == 0) 7 else 9
+                    val fReg = fxAtlas.findRegion("$flashDir/1") ?: continue
+                    val fNW = fReg.regionWidth / SPRITE_SCALE; val fNH = fReg.regionHeight / SPRITE_SCALE
+                    val fsx = (30f + r1 * 10f) / 100f; val fsy = (20f + r2 * 20f) / 100f
+                    effects += SpriteEffect(flashDir, flashFc, 0f, e.x0, e.y0,
+                        rotation = rot, w = fsx * fNW, h = fsy * fNH, sx = 1f, sy = 1f,
+                        originX = 0f, originY = fsy * fNH / 2f)
+                    // Bullet: 103×2-unit sprite stretched to reach the hit point
+                    val bReg = fxAtlas.findRegion("fx_chain_bullet/1") ?: continue
+                    val bNH = bReg.regionHeight / SPRITE_SCALE
+                    effects += SpriteEffect("fx_chain_bullet", 7, 0f, e.x0, e.y0,
+                        rotation = rot, w = dist, h = bNH, sx = 1f, sy = 1f,
+                        originX = 0f, originY = bNH / 2f)
                 }
                 // --- LaserCharge: 90%-chance burst at drone position while charging/firing ---
                 is Simulator.SpawnEvent.LaserCharge -> {

@@ -338,6 +338,10 @@ class DroneChaingun(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType:
     private val gunDir   = Vec2(); private val sweep = Vec2()
     private val hitPos   = Vec2(); private val hitN  = Vec2()
 
+    override fun startPrefiring(sim: Simulator, target: Vec2) {
+        sim.playSoundEntity("chaingun_powerup")
+    }
+
     override fun updatePrefiring(sim: Simulator, target: Vec2) {
         val dx = target.x - pos.x; val dy = target.y - pos.y
         val delta = MathUtils.wrapAngleShortest(atan2(dy, dx) - gfxOrn)
@@ -367,6 +371,7 @@ class DroneChaingun(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType:
             val bl = sqrt(bx*bx + by*by); bx /= bl; by /= bl
             gfxOrn = atan2(by, bx)
             val dist = sim.segGrid.getRaycastDistance(pos.x, pos.y, bx, by, hitPos, hitN)
+            sim.playSoundEntity("chaingun_fire")
             sim.spawnChainBullet(pos.x, pos.y, hitPos.x, hitPos.y)
             for (p in sim.players) {
                 if (!p.isDead() && ColUtils.overlapCircleVsSegment(p.getPos(), p.getRadius(), pos, hitPos, dist)) {
@@ -377,5 +382,9 @@ class DroneChaingun(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType:
             }
         }
         return false
+    }
+
+    override fun startPostfiring(sim: Simulator) {
+        sim.playSoundEntity("chaingun_powerdown")
     }
 }

@@ -200,6 +200,7 @@ open class Simulator(
         data class TurretBullet(val x0: Float, val y0: Float, val x1: Float, val y1: Float,
                                 val hnx: Float, val hny: Float) : SpawnEvent()
         data class LaserCharge(val x: Float, val y: Float) : SpawnEvent()
+        data class ChainBullet(val x0: Float, val y0: Float, val x1: Float, val y1: Float) : SpawnEvent()
     }
 
     val pendingSpawns = mutableListOf<SpawnEvent>()
@@ -217,7 +218,9 @@ open class Simulator(
                                hitNx: Float = 0f, hitNy: Float = 0f) {
         pendingSpawns += SpawnEvent.TurretBullet(fromX, fromY, toX, toY, hitNx, hitNy)
     }
-    open fun spawnChainBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {}
+    open fun spawnChainBullet(fromX: Float, fromY: Float, toX: Float, toY: Float) {
+        pendingSpawns += SpawnEvent.ChainBullet(fromX, fromY, toX, toY)
+    }
     open fun spawnLaserCharge(x: Float, y: Float) { pendingSpawns += SpawnEvent.LaserCharge(x, y) }
     open fun playSoundGold() {}
     open fun playSoundEntity(name: String) {}
