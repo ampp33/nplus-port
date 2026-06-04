@@ -79,9 +79,11 @@ object LevelBuilder {
 
         // Subclass overrides sound/particle hooks with AudioManager calls
         return object : Simulator(segGrid, edgeGrid, objGrid, entities, players, tileGrid) {
-            override fun playSoundGold()               = audio.playGold()
-            override fun playSoundRagdoll(name: String) = audio.playSound(name)
-            override fun playSoundEntity(name: String)  = audio.playSound(name)
+            override fun playSoundGold()                  = audio.playGold()
+            override fun playSoundRagdoll(name: String)   = audio.playSound(name)
+            override fun playSoundEntity(name: String)    = audio.playSound(name)
+            override fun startLoopSoundEntity(name: String) = audio.startLoopSound(name)
+            override fun stopLoopSoundEntity(name: String)  = audio.stopLoopSound(name)
         }
     }
 

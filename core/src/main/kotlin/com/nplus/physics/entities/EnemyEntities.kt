@@ -381,9 +381,14 @@ class RocketEntity(private val objGrid: GridEntity, x: Float, y: Float) : Entity
                 rocketVel.set(rocketSpeed * rocketDir.x, rocketSpeed * rocketDir.y)
                 rocketPos.x += rocketVel.x; rocketPos.y += rocketVel.y
                 objGrid.entityMove(rocketPos, this)
+                // Expand bounding box by 1 unit so segments stored at cell boundaries
+                // (e.g. ceiling at y=24 stored in row 0, but worldToGrid(24)=1) are found
+                // even when the rocket lands exactly on the boundary value.
+                // Required: segEps > maxSpeed so the nearest boundary cell is always included.
+                val segEps = maxSpeed + 0.5f
                 sim.segGrid.gatherCellContentsFromWorldspaceRegion(
-                    min(oldPos.x, rocketPos.x), min(oldPos.y, rocketPos.y),
-                    max(oldPos.x, rocketPos.x), max(oldPos.y, rocketPos.y), nearSegs)
+                    min(oldPos.x, rocketPos.x) - segEps, min(oldPos.y, rocketPos.y) - segEps,
+                    max(oldPos.x, rocketPos.x) + segEps, max(oldPos.y, rocketPos.y) + segEps, nearSegs)
                 for (seg in nearSegs) {
                     val t = seg.intersectWithRay(oldPos, rocketVel, 0f, hitPos, hitN)
                     if (t == -1f || t < 2f) { explode(sim); return }
@@ -399,8 +404,11 @@ class RocketEntity(private val objGrid: GridEntity, x: Float, y: Float) : Entity
                     val d = sqrt(dx*dx + dy*dy); if (d == 0f) return
                     val nx = dx/d; val ny = dy/d
                     val perp = -rocketDir.y * nx + rocketDir.x * ny
-                    rocketDir.x += turnRate * perp * -rocketDir.y
-                    rocketDir.y += turnRate * perp *  rocketDir.x
+                    // Save perpendicular components before modifying dir to avoid mutation ordering bug
+                    val perpX = -rocketDir.y
+                    val perpY =  rocketDir.x
+                    rocketDir.x += turnRate * perp * perpX
+                    rocketDir.y += turnRate * perp * perpY
                     val len = rocketDir.len()
                     if (len != 0f) { rocketDir.x /= len; rocketDir.y /= len }
                 }

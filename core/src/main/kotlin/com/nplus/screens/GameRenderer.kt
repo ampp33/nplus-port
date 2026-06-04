@@ -128,6 +128,11 @@ class GameRenderer : Disposable {
     private val turretShots = mutableListOf<TurretShot>()
     private val TURRET_SHOT_DURATION = 10f / SimGlobals.SIM_RATE  // 10 sim ticks → seconds
 
+    // Laser beam lines collected during entity-sprite pass and drawn in a separate ShapeRenderer pass.
+    // thick=false → hairline prefire (golden); thick=true → 3px firing (dark magenta).
+    private data class LaserBeam(val x0: Float, val y0: Float, val x1: Float, val y1: Float, val thick: Boolean)
+    private val laserBeams = mutableListOf<LaserBeam>()
+
     // Gold collection animations: entity → stateTime when it was first seen as collected.
     // Drives one-shot playback of frames 4–17 (the rising sparkle).
     private val goldCollectTimes = mutableMapOf<GoldEntity, Float>()
@@ -301,12 +306,17 @@ class GameRenderer : Disposable {
         shape.rect(0f, 0f, WORLD_W, WORLD_H)
         shape.end()
 
-        // Pass 1: entity sprites — rendered before solid walls so walls occlude them.
+        // Pass 1: entity sprites + particle effects — both behind tiles so walls occlude them.
         batch.projectionMatrix = camera.combined
         batch.enableBlending()
+        laserBeams.clear()
         batch.begin()
         drawEntitySprites(sim.entityList())
+        tickAndDrawEffects(dt)
         batch.end()
+
+        // Pass 1b: laser beam lines (behind tiles so walls occlude them like the entity bodies).
+        if (laserBeams.isNotEmpty()) drawLaserBeams()
 
         // Pass 2: non-FULL tile sprites.
         batch.begin()
@@ -334,14 +344,13 @@ class GameRenderer : Disposable {
         }
         shape.end()
 
-        // Pass 4: dead ninja ragdoll (color-replacement shader) + sprite effects.
+        // Pass 4: dead ninja ragdoll (color-replacement shader).
         batch.projectionMatrix = camera.combined
         batch.begin()
         batch.setShader(ninjaShader)
         for (ninja in sim.players) if (ninja.isDead()) drawRagdoll(ninja, ninjaColor)
         batch.setShader(null)
         batch.setColor(Color.WHITE)
-        tickAndDrawEffects(dt)
         batch.end()
 
         // Pass 5: fading turret shot lines (white, 10-sim-tick fade)
@@ -721,7 +730,53 @@ class GameRenderer : Disposable {
             }
 
             is DroneLaser -> {
-                drawCentered(cycled("drone_laser", 26, FPS_DRONE), e.pos.x, e.pos.y)
+                val fstate = e.getFiringState()
+                val px = e.pos.x; val py = e.pos.y
+
+                // Body: state-driven animation matching original AS3 frame labels.
+                //   Frame 1       = "move" (stopped)
+                //   Frames 2–14   = "prefire" animation (13 frames, progress-mapped)
+                //   Frame 15      = "firing" (stopped)
+                //   Frames 16–26  = "postfire" animation (11 frames, time-cycled)
+                val bodyReg = when (fstate) {
+                    1 -> {
+                        val idx = 1 + (e.getPrefireProgress() * 12).toInt().coerceIn(0, 12)
+                        fr("drone_laser", idx + 1)       // frames 2–14
+                    }
+                    2 -> fr("drone_laser", 15)           // "firing" frame
+                    3 -> {
+                        val frame = 16 + ((stateTime * FPS_DRONE).toInt() % 11)
+                        fr("drone_laser", frame)         // frames 16–26
+                    }
+                    else -> fr("drone_laser", 1)         // idle: frame 1
+                }
+                drawCentered(bodyReg, px, py)
+
+                // Eye: same offset logic as DroneChaser/DroneZap
+                val ornC = e.gfxOrn.toDouble()
+                drawCentered(fr("drone_eye", 1),
+                    px + cos(ornC).toFloat() * 4f,
+                    py + sin(ornC).toFloat() * 4f)
+
+                // Beam line — collected for a separate ShapeRenderer pass.
+                val hit = e.getLaserHitPos()
+                when (fstate) {
+                    1 -> laserBeams += LaserBeam(px, py, hit.x, hit.y, thick = false)
+                    2 -> laserBeams += LaserBeam(px, py, hit.x, hit.y, thick = true)
+                }
+
+                // Blast sprite at hit position during firing, scales 0.3→2.3 over laser duration.
+                // Uses fxAtlas directly — fx_laser_blast is packed there, not in the sprites atlas.
+                if (fstate == 2) {
+                    val progress = e.getLaserTimer().toFloat() / e.getLaserDuration()
+                    val blastScale = (30 + 200 * progress) / 100f
+                    val blastFrame = ((stateTime * FPS_EFFECTS).toInt() % 9) + 1
+                    val bReg = fxAtlas.findRegion("fx_laser_blast/$blastFrame") ?: continue
+                    val bNatW = bReg.regionWidth / SPRITE_SCALE
+                    val bNatH = bReg.regionHeight / SPRITE_SCALE
+                    val bW = bNatW * blastScale; val bH = bNatH * blastScale
+                    batch.draw(bReg, hit.x - bW / 2f, fy(hit.y) - bH / 2f, bW, bH)
+                }
             }
 
             is DroneChaingun -> {
@@ -1102,9 +1157,49 @@ class GameRenderer : Disposable {
                 is Simulator.SpawnEvent.TurretBullet -> {
                     turretShots += TurretShot(e.x0, e.y0, e.x1, e.y1, e.hnx, e.hny)
                 }
+                // --- LaserCharge: 90%-chance burst at drone position while charging/firing ---
+                is Simulator.SpawnEvent.LaserCharge -> {
+                    if (rnd() > 0.9f) continue   // 90% spawn rate matches original
+                    val variant = (rnd() * 3).toInt().coerceIn(0, 2)
+                    val dir = "fx_laser_charge$variant"
+                    val fc  = when (variant) { 0 -> 10; 1 -> 14; else -> 15 }
+                    val reg = fxAtlas.findRegion("$dir/1") ?: continue
+                    val natW = reg.regionWidth / SPRITE_SCALE; val natH = reg.regionHeight / SPRITE_SCALE
+                    // scaleX 0.20–0.40, scaleY 0.10–0.30, random rotation — matches AS3 Spawn_LaserCharge
+                    val fsx = (20 + rnd() * 20) / 100f; val fsy = (10 + rnd() * 20) / 100f
+                    val rot = rnd() * 360f
+                    val absW = fsx * natW; val absH = fsy * natH
+                    // Registration at left-center: content sits at the far right of the canvas,
+                    // so the streak radiates outward from the drone rather than centering on it.
+                    effects += SpriteEffect(dir, fc, 0f, e.x, e.y,
+                        rotation = -rot,
+                        w = absW, h = absH,
+                        sx = 1f, sy = 1f,
+                        originX = 0f, originY = absH / 2f)
+                }
             }
         }
         sim.pendingSpawns.clear()
+    }
+
+    private fun drawLaserBeams() {
+        Gdx.gl.glEnable(GL20.GL_BLEND)
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+        shape.projectionMatrix = camera.combined
+        // Use rectLine (filled quad) instead of GL_LINES — smooth, no aliasing.
+        shape.begin(ShapeType.Filled)
+        for (beam in laserBeams) {
+            if (beam.thick) {
+                // FIRING: 3.5-unit-wide dark-magenta beam  (0x882062 = RGB 136,32,98)
+                shape.color = Color(136/255f, 32/255f, 98/255f, 1f)
+                shape.rectLine(beam.x0, fy(beam.y0), beam.x1, fy(beam.y1), 3.5f)
+            } else {
+                // PREFIRE: 0.5-unit golden targeting line  (0xCB9119 = RGB 203,145,25)
+                shape.color = Color(203/255f, 145/255f, 25/255f, 0.6f)
+                shape.rectLine(beam.x0, fy(beam.y0), beam.x1, fy(beam.y1), 0.5f)
+            }
+        }
+        shape.end()
     }
 
     private fun drawTurretShots(dt: Float) {

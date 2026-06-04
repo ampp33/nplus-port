@@ -12,6 +12,7 @@ fun main() {
         useVsync(true)
         setResizable(false)
         setWindowIcon("icon16.png", "icon32.png", "icon128.png")
+        setBackBufferConfig(8, 8, 8, 8, 16, 0, 4)  // 4× MSAA — smooths all geometry edges
     }
     Lwjgl3Application(NPlusGame(), config)
 }

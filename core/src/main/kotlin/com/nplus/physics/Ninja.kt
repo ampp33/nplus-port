@@ -502,7 +502,11 @@ class Ninja(
     /** Kill the ninja. Returns false if already dead/disabled. */
     fun simKill(enemyType: Int, kx: Float, ky: Float, fx: Float, fy: Float): Boolean {
         if (state == State.AWAITING_DEATH || state == State.DISABLED) return false
-        deathPos.set(kx, ky); deathForce.set(fx, fy)
+        deathPos.set(kx, ky)
+        // Death forces (e.g. laserDir*6, turretDir*8) were calibrated at sim_rate=60 in AS3.
+        // Scale by 60/SIM_RATE so the per-second impulse is the same regardless of tick rate.
+        val fs = 60f / SimGlobals.SIM_RATE
+        deathForce.set(fx * fs, fy * fs)
         deathType = SimGlobals.ETYPE_TO_DTYPE[enemyType]
         actionDie()
         return true

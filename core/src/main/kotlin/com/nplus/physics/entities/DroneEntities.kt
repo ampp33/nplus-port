@@ -215,7 +215,9 @@ abstract class DroneShooterBase(
     private var targetIndex  = -1
     private val zeroV = Vec2()
 
-    protected fun getFiringState() = firingState
+    fun getFiringState() = firingState
+    // Returns prefire charge progress [0,1] during state 1; 0 otherwise.
+    fun getPrefireProgress() = if (firingState == 1) (firingTimer.toFloat() / prefireDelay).coerceIn(0f, 1f) else 0f
 
     final override fun move(sim: Simulator) { if (firingState == 0) super.move(sim) }
 
@@ -240,12 +242,21 @@ abstract class DroneShooterBase(
             3 -> {
                 firingTimer++
                 if (firingTimer >= postfireDelay) {
-                    val visible = sim.players.indices.any { i ->
-                        !sim.players[i].isDead() && sim.segGrid.raycastVsPlayer(
-                            pos, sim.players[i].getPos(), sim.players[i].getRadius(), zeroV, zeroV)
+                    // Mirror AS3 Internal_StartPrefiring: find first visible player, update
+                    // targetIndex, and call startPrefiring so the charge sound fires again.
+                    var found = -1
+                    for (i in sim.players.indices) {
+                        if (!sim.players[i].isDead() && sim.segGrid.raycastVsPlayer(
+                                pos, sim.players[i].getPos(), sim.players[i].getRadius(), zeroV, zeroV)) {
+                            found = i; break
+                        }
                     }
-                    if (visible) { firingTimer = 0; firingState = 1 }
-                    else { firingState = 0; targetIndex = -1 }
+                    if (found >= 0) {
+                        firingTimer = 0; firingState = 1; targetIndex = found
+                        startPrefiring(sim, sim.players[found].getPos())
+                    } else {
+                        firingState = 0; targetIndex = -1
+                    }
                 }
             }
         }
@@ -266,7 +277,8 @@ class DroneLaser(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType: In
     : DroneShooterBase(objGrid, x, y, 12f*(1f/14f)*0.5f*(40f/SimGlobals.SIM_RATE), dir, moveType,
         (30f*(SimGlobals.SIM_RATE/40f)).toInt(), (40f*(SimGlobals.SIM_RATE/40f)).toInt()) {
 
-    private val laserDuration = 80
+    // Original laser_duration=80 was unscaled at sim_rate=60; scale to match wall-clock duration.
+    private val laserDuration = (80 * SimGlobals.SIM_RATE / 60f).toInt()
     private var laserTimer    = 0
     private val laserDir      = Vec2()
     private val laserHitPos   = Vec2()
@@ -285,6 +297,11 @@ class DroneLaser(objGrid: GridEntity, x: Float, y: Float, dir: Int, moveType: In
 
     override fun startFiring(sim: Simulator, target: Vec2, targetVel: Vec2) {
         super.startFiring(sim, target, targetVel); laserTimer = 0
+        sim.startLoopSoundEntity("laser_fire")
+    }
+
+    override fun startPostfiring(sim: Simulator) {
+        sim.stopLoopSoundEntity("laser_fire")
     }
 
     override fun updateFiring(sim: Simulator): Boolean {
