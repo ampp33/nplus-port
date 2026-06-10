@@ -79,7 +79,13 @@ class MineEntity(private val objGrid: GridEntity, x: Float, y: Float) : EntityBa
 
     override fun collideVsCircleLogical(sim: Simulator, ninja: Ninja?, result: CollisionResultLogical,
         pos: Vec2, vel: Vec2, normal: Vec2, radius: Float, eps: Float): Boolean {
-        if (!exploded && ColUtils.overlapCircleVsCircle(this.pos, r, pos, radius)) {
+        // Shift the effective trigger centre 2.2 units down (game y-down) to compensate for
+        // the ninja sprite's 2.2-unit visual offset above its physics centre.  This makes the
+        // mine fire when the *visual* ninja reaches the mine, matching the original game feel.
+        val checkY = this.pos.y + 2.2f
+        val cdx = pos.x - this.pos.x; val cdy = pos.y - checkY
+        val triggerR = r + radius
+        if (!exploded && cdx * cdx + cdy * cdy < triggerR * triggerR) {
             sim.spawnExplosion(this.pos.x, this.pos.y)
             sim.playSoundEntity("mine_explode")
             exploded = true

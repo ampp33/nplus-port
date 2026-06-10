@@ -369,7 +369,7 @@ class MenuScreen(private val appState: AppStateManager,
         for (i in items.indices) {
             val rowY = startY - i * rowH
             fontLg.color = if (i == mainCursor) COL_TEXT_DARK else COL_TEXT_DIM
-            drawTextCentred(fontLg, items[i], centreX, rowY)
+            drawTextCentred(fontLg, items[i], centreX, rowY - 10f + fontLg.capHeight / 2f)
         }
         fontMd.color = COL_TEXT_DIM
         drawTextCentred(fontMd, "${com.nplus.Platform.confirm} select", centreX, 38f)
@@ -413,9 +413,9 @@ class MenuScreen(private val appState: AppStateManager,
 
         batch.begin()
         fontLg.color = if (confirmCursor == 0) COL_TEXT_DARK else COL_TEXT_DIM
-        drawTextCentred(fontLg, "Yes, start over", centreX, btnY)
+        drawTextCentred(fontLg, "Yes, start over", centreX, btnY - 10f + fontLg.capHeight / 2f)
         fontLg.color = if (confirmCursor == 1) COL_TEXT_DARK else COL_TEXT_DIM
-        drawTextCentred(fontLg, "No, go back", centreX, btnY - 44f)
+        drawTextCentred(fontLg, "No, go back", centreX, btnY - 54f + fontLg.capHeight / 2f)
         batch.end()
     }
 
@@ -464,7 +464,7 @@ class MenuScreen(private val appState: AppStateManager,
                 progress.isUnlocked(ep)-> COL_TEXT_DARK
                 else                   -> COL_TEXT_LOCK
             }
-            drawTextCentred(fontMd, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + 4f)
+            drawTextCentred(fontMd, episodeLabel(ep), cx + CELL_W / 2f, cy + CELL_H / 2f + fontMd.capHeight / 2f)
         }
 
         // Episode record (only shown once a record exists)

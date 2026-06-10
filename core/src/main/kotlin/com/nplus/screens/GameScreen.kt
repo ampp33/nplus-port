@@ -45,7 +45,7 @@ class GameScreen(
         private const val TICK_DT             = 1f / SimGlobals.SIM_RATE
         private const val MAX_DELTA           = 0.1f
         // Frames before jump input is accepted in POST_GAME (prevents instant retry on death)
-        private const val POST_GAME_COOLDOWN = (SimGlobals.SIM_RATE * 0.5f).toInt()  // 30
+        private const val POST_GAME_COOLDOWN = (SimGlobals.SIM_RATE * 0f).toInt()  // 0s
         // Celebration animation frame ranges (start..end inclusive) from ninja.atlas
         private val CELEBRATION_RANGES = listOf(
             106 to 166, 167 to 234, 235 to 354, 355 to 448,

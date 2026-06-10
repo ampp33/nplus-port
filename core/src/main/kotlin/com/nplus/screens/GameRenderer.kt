@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.GL20
 import com.badlogic.gdx.graphics.OrthographicCamera
+import com.badlogic.gdx.math.Vector3
 import com.badlogic.gdx.graphics.Texture
 import com.badlogic.gdx.graphics.g2d.BitmapFont
 import com.badlogic.gdx.graphics.g2d.GlyphLayout
@@ -194,11 +195,16 @@ class GameRenderer : Disposable {
     )
     private val effects = mutableListOf<SpriteEffect>()
 
-    // Timer bar font (uni05, 16 px) — shows the formatted time value inside the bar
-    private lateinit var timerFont: BitmapFont
-    // Overlay / HUD font (uni05 pixel font, 20 px) — PRE_GAME / PAUSED / POST_GAME prompts
+    private lateinit var timerFont:   BitmapFont
     private lateinit var overlayFont: BitmapFont
     private val glyphLayout = GlyphLayout()
+
+    // Screen-space camera for pixel-perfect text rendering (fonts regenerated to match screen size on resize)
+    private val uiCamera = OrthographicCamera()
+    private var screenW  = 1
+    private var screenH  = 1
+    private lateinit var fontGen: FreeTypeFontGenerator
+    private val tmpVec = Vector3()
 
     init {
         camera.setToOrtho(false, WORLD_W + 2 * GAME_PAD, WORLD_H + 2 * GAME_PAD)
@@ -216,9 +222,11 @@ class GameRenderer : Disposable {
         ninjaAtlas   = TextureAtlas(Gdx.files.internal("atlas/ninja.atlas"))
         ragdollAtlas = TextureAtlas(Gdx.files.internal("atlas/ragdoll.atlas"))
         fxAtlas      = TextureAtlas(Gdx.files.internal("atlas/fx.atlas"))
-        // Sprites are at 3x resolution; atlas is packed with Linear filter.
-        // Enforce it in case any GPU driver overrides the atlas hint.
-        atlas.textures.forEach { it.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear) }
+        // Tile and entity sprites are pixel-art exported at 3×. NEAREST filter gives
+        // crisp edges and prevents Linear-filter blending artifacts at tile junctions
+        // (the inter-tile "bump" that LINEAR causes when edge pixels blend with atlas
+        // transparent padding on adjacent regions).
+        atlas.textures.forEach { it.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest) }
         // Each tile PNG is 216×216 (3× original 72×72) with 72px transparent padding on each side.
         // Extract the centre 72×72 region and draw it at 24×24 game units (explicit in drawTiles).
         sprTileRegions = Array(42) { t ->
@@ -226,22 +234,25 @@ class GameRenderer : Disposable {
                 ?: error("Atlas missing region: tiles/${t + 1}")
             TextureRegion(r.texture, r.regionX + 72, r.regionY + 72, 72, 72)
         }
-        val gen8 = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_8.ttf"))
-        val p8 = FreeTypeFontParameter().apply {
-            size      = 16
-            mono      = true
-            minFilter = Texture.TextureFilter.Nearest
-            magFilter = Texture.TextureFilter.Nearest
-            color     = Color.WHITE
-        }
-        timerFont   = gen8.generateFont(p8)
-        overlayFont = gen8.generateFont(p8)
-        gen8.dispose()
+        fontGen     = FreeTypeFontGenerator(Gdx.files.internal("fonts/uni05_8.ttf"))
+        timerFont   = makeFont(16)
+        overlayFont = makeFont(16)
 
         ShaderProgram.pedantic = false
         ninjaShader = ShaderProgram(NINJA_VERT, NINJA_FRAG)
         if (!ninjaShader.isCompiled)
             Gdx.app.error("GameRenderer", "Ninja shader error: ${ninjaShader.log}")
+    }
+
+    private fun makeFont(size: Int): BitmapFont {
+        val p = FreeTypeFontParameter().apply {
+            this.size = size.coerceAtLeast(8)
+            mono      = true
+            minFilter = Texture.TextureFilter.Nearest
+            magFilter = Texture.TextureFilter.Nearest
+            color     = Color.WHITE
+        }
+        return fontGen.generateFont(p)
     }
 
     /** Look up a 1-based frame. Ninja frames come from the Linear-filtered ninja atlas. */
@@ -271,6 +282,20 @@ class GameRenderer : Disposable {
         camera.position.set(WORLD_W / 2f, WORLD_H / 2f, 0f)
         camera.update()
         unitsPerPx = WORLD_H / height.toFloat()
+        screenW = width
+        screenH = height
+        uiCamera.setToOrtho(false, width.toFloat(), height.toFloat())
+        // Regenerate fonts at the exact screen pixel size so they render 1:1 without scaling distortion.
+        val fontPx = (16f * height / WORLD_H).roundToInt().coerceAtLeast(8)
+        if (::timerFont.isInitialized)   { timerFont.dispose();   timerFont   = makeFont(fontPx) }
+        if (::overlayFont.isInitialized) { overlayFont.dispose(); overlayFont = makeFont(fontPx) }
+    }
+
+    private fun worldToScreen(wx: Float, wy: Float): Pair<Float, Float> {
+        tmpVec.set(wx, wy, 0f)
+        camera.project(tmpVec, viewport.screenX.toFloat(), viewport.screenY.toFloat(),
+                       viewport.screenWidth.toFloat(), viewport.screenHeight.toFloat())
+        return tmpVec.x to tmpVec.y
     }
 
 
@@ -318,17 +343,19 @@ class GameRenderer : Disposable {
         // Pass 1b: laser beam lines (behind tiles so walls occlude them like the entity bodies).
         if (laserBeams.isNotEmpty()) drawLaserBeams()
 
-        // Pass 2: non-FULL tile sprites.
-        batch.begin()
-        drawTiles(sim.tileGrid)
-        batch.end()
-
-        // Pass 3: living ninja.
+        // Pass 2: living ninja — drawn before tiles so tile edges occlude sprite corners at
+        // slope/flat transitions, matching the original Flash display-list order
+        // (entities → ninja → tiles on top).
         batch.begin()
         batch.setShader(ninjaShader)
         drawNinjaSprites(sim.players, ninjaColor)
         batch.setShader(null)
         batch.setColor(Color.WHITE)
+        batch.end()
+
+        // Pass 3: non-FULL tile sprites (on top of ninja — hides corner clipping).
+        batch.begin()
+        drawTiles(sim.tileGrid)
         batch.end()
 
         // Pass 4: FULL (type-1) solid walls.
@@ -374,14 +401,12 @@ class GameRenderer : Disposable {
         // Unclamped fraction so gold overflow (fraction > 1.0) is visible
         val fraction = if (startingTicks > 0) currentTicks.toFloat() / startingTicks.toFloat() else 0f
 
-        // Reserve space on the left for the timer number.
+        // Reserve space on the left for the timer number (font metrics are now in screen pixels).
         glyphLayout.setText(timerFont, "0000.000")
-        val numAreaW = glyphLayout.width + 8f   // 8 units gap between number and bar
+        val numAreaW = glyphLayout.width * unitsPerPx + 8f   // px→world + 8 world-unit gap
 
-        // Fill width: fraction=1.0 → BAR_NORMAL_W; gold extends to right edge.
         val fillW = (fraction * BAR_NORMAL_W).coerceIn(0f, WORLD_W - numAreaW)
 
-        // Bar sits 10 px below the top of the window, inside the level's gray top tile border.
         val topPad = 7f * unitsPerPx
         val barY   = WORLD_H - BAR_H - topPad
         shape.projectionMatrix = camera.combined
@@ -390,26 +415,25 @@ class GameRenderer : Disposable {
         if (fillW > 0f) shape.rect(numAreaW, barY, fillW, BAR_H)
         shape.end()
 
-        // Timer number: left-aligned, vertically centred in the bar strip
+        // Timer number: drawn in screen space so it renders pixel-perfect at any resolution
         val text = formatTimer(currentTicks)
-        val rawTy = barY + BAR_H / 2f + timerFont.capHeight / 2f
-        val ty = ceil(rawTy / unitsPerPx) * unitsPerPx
-        batch.projectionMatrix = camera.combined
+        val (timerSX, _)     = worldToScreen(4f, 0f)
+        val (_, barBottomSY) = worldToScreen(0f, barY)
+        val (_, barTopSY)    = worldToScreen(0f, barY + BAR_H)
+        val timerSY = ceil((barBottomSY + barTopSY) / 2f + timerFont.capHeight / 2f)
+        batch.projectionMatrix = uiCamera.combined
         batch.begin()
         timerFont.color = COL_TIMER_TEXT
-        timerFont.draw(batch, text, 4f, ty + 1f)
+        timerFont.draw(batch, text, timerSX, timerSY)
         batch.end()
     }
 
     private fun drawLevelLabel(label: String) {
-        // Level name: 10 px from the left and 10 px from the bottom of the window.
-        val pad = 12f * unitsPerPx
-        val tx  = pad
-        val ty  = pad + timerFont.capHeight
-        batch.projectionMatrix = camera.combined
+        val padPx = 12f
+        batch.projectionMatrix = uiCamera.combined
         batch.begin()
         timerFont.color = COL_MODAL_TEXT
-        timerFont.draw(batch, label, tx, ty)
+        timerFont.draw(batch, label, padPx, padPx + timerFont.capHeight)
         batch.end()
     }
 
@@ -467,7 +491,7 @@ class GameRenderer : Disposable {
             else             -> null
         }
 
-        // Measure text to size the modal box (capHeight for true visual centering)
+        // Font metrics and layout are all in screen pixels (font is regenerated at screen size).
         val capH     = overlayFont.capHeight
         val lineGap  = capH * 0.8f
         val lineStep = capH + lineGap
@@ -479,15 +503,15 @@ class GameRenderer : Disposable {
         }
         val lineCount = if (line2 != null) 2 else 1
         val textH = capH * lineCount + lineGap * (lineCount - 1)
-        val padX  = 14f
-        val padY  = 8f
-        val boxW  = maxTextW + padX * 2f
-        val boxH  = textH + padY * 2f
-        val boxX  = (WORLD_W - boxW) / 2f
-        val boxY  = (WORLD_H - boxH) / 2f
+        // Convert original world-unit padding to screen pixels
+        val padX = 14f / unitsPerPx
+        val padY = 8f / unitsPerPx
+        val boxW = maxTextW + padX * 2f
+        val boxH = textH + padY * 2f
+        val boxX = (screenW - boxW) / 2f
+        val boxY = (screenH - boxH) / 2f
 
-        // Draw the modal background and border over the unobscured play area
-        shape.projectionMatrix = camera.combined
+        shape.projectionMatrix = uiCamera.combined
         shape.begin(ShapeType.Filled)
         shape.color = COL_MODAL_BG
         shape.rect(boxX, boxY, boxW, boxH)
@@ -498,12 +522,10 @@ class GameRenderer : Disposable {
         shape.rect(boxX, boxY, boxW, boxH)
         shape.end()
 
-        // Text centered inside the modal box
-        batch.projectionMatrix = camera.combined
+        batch.projectionMatrix = uiCamera.combined
         batch.begin()
         overlayFont.color = COL_MODAL_TEXT
 
-        // y = box center + half of visible text block height (capHeight-based vertical centering)
         var y = boxY + boxH / 2f + textH / 2f
         glyphLayout.setText(overlayFont, line1)
         overlayFont.draw(batch, line1, boxX + (boxW - glyphLayout.width) / 2f, y)
@@ -526,6 +548,7 @@ class GameRenderer : Disposable {
         if (::fxAtlas.isInitialized)      fxAtlas.dispose()
         if (::timerFont.isInitialized)    timerFont.dispose()
         if (::overlayFont.isInitialized)  overlayFont.dispose()
+        if (::fontGen.isInitialized)      fontGen.dispose()
         if (::ninjaShader.isInitialized)  ninjaShader.dispose()
     }
 
@@ -539,10 +562,14 @@ class GameRenderer : Disposable {
         val cs   = Simulator.GRID_CELL_SIZE
         // Same 0.5-unit expansion as the FULL-tile ShapeRenderer pass: prevents 1-pixel gaps
         // between adjacent tiles at non-integer scale factors on high-DPI Android screens.
+        // E=0.5 prevents sub-pixel gaps at non-integer viewport scales.
+        // NEAREST filter (set in loadSprites) means the expansion replicates the
+        // edge pixel instead of blending with transparent atlas padding — no more
+        // diagonal-edge bump while gaps are still prevented.
         val E = 0.5f
         for (row in 0 until rows) for (col in 0 until cols) {
             val t = tileGrid[col + row * cols]
-            if (t == TileTypes.EMPTY || t == TileTypes.FULL) continue  // FULL drawn in pre-pass
+            if (t == TileTypes.EMPTY || t == TileTypes.FULL) continue
             batch.draw(sprTileRegions[t],
                 col * cs - E, fy((row + 1) * cs) - E,
                 cs + 2 * E, cs + 2 * E)
@@ -721,7 +748,10 @@ class GameRenderer : Disposable {
             is DroneChaser -> {
                 drawCentered(cycled("drone_chaser", 3, FPS_DRONE), e.pos.x, e.pos.y)
                 val ornC = e.gfxOrn.toDouble()
-                drawCentered(fr("drone_eye", 1), e.pos.x + cos(ornC).toFloat() * 4f, e.pos.y + sin(ornC).toFloat() * 4f)
+                // Eye orbits the circular body center, which sits 3.67 units below the physics/canvas center
+                // (the antenna structure above the body pulls the canvas center upward).
+                val eyeCy = e.pos.y + 3.67f
+                drawCentered(fr("drone_eye", 1), e.pos.x + cos(ornC).toFloat() * 4f, eyeCy + sin(ornC).toFloat() * 4f)
             }
 
             is DroneZap -> {
@@ -753,11 +783,8 @@ class GameRenderer : Disposable {
                 }
                 drawCentered(bodyReg, px, py)
 
-                // Eye: same offset logic as DroneChaser/DroneZap
                 val ornC = e.gfxOrn.toDouble()
-                drawCentered(fr("drone_eye", 1),
-                    px + cos(ornC).toFloat() * 4f,
-                    py + sin(ornC).toFloat() * 4f)
+                drawCentered(fr("drone_eye", 1), px + cos(ornC).toFloat() * 4f, py + sin(ornC).toFloat() * 4f)
 
                 // Beam line — collected for a separate ShapeRenderer pass.
                 val hit = e.getLaserHitPos()
@@ -860,16 +887,13 @@ class GameRenderer : Disposable {
             ninjaLastState[ninja] = state.state
             val reg = selectNinjaFrame(ninja, state) ?: continue
             val ornDeg = -Math.toDegrees(state.orientation.toDouble()).toFloat()
-            // Wall-slide: sprite body extends 4.4 units past physics radius — shift toward normal
-            // In-air frames extend up to 13 world units from centre (physics radius = 10),
-            // so shift the sprite 3 units away from any wall the ninja is touching to keep
-            // limbs inside the physics boundary.  Wall-slide uses 4.4 for the same reason.
-            val xOff = when (state.state) {
-                Ninja.State.WALL_SLIDING -> state.wallNormalX * 4.4f
-                Ninja.State.JUMPING, Ninja.State.FALLING, Ninja.State.AWAITING_DEATH ->
-                    if (state.wallNormalX != 0f) state.wallNormalX * 3f else 0f
-                else -> 0f
-            }
+            // Shift sprite away from any nearby wall so limbs don't clip into it.
+            // WALL_SLIDING body extends 4.4 units past physics radius; all other frames
+            // (run, skid, stand, air) can have arms/legs extending ~3 units past radius.
+            // Apply to every state whenever wallNormalX is set.
+            val xOff = if (state.wallNormalX == 0f) 0f
+                       else if (state.state == Ninja.State.WALL_SLIDING) state.wallNormalX * 4.4f
+                       else state.wallNormalX * 3f
             drawNinjaTex(reg, state.posX + xOff, state.posY, state.facing, ornDeg)
         }
     }
@@ -877,7 +901,7 @@ class GameRenderer : Disposable {
     private fun drawNinjaTex(reg: TextureRegion, px: Float, py: Float, facing: Float, ornDeg: Float) {
         // Ninja frames are 1x (187×140 px), always downscaled to ~37×28 game units. No SPRITE_SCALE.
         val w = reg.regionWidth * 0.2f; val h = reg.regionHeight * 0.2f
-        val ox = w / 2f; val oy = h / 2f - 2.9f
+        val ox = w / 2f; val oy = h / 2f - 2.2f
         batch.draw(reg, px - ox, fy(py) - oy, ox, oy, w, h, facing, 1f, ornDeg)
     }
 
